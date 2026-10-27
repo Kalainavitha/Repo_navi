@@ -1,0 +1,84 @@
+@import 'tailwindcss';
+
+:root {
+  color-scheme: light;
+  font-family: Inter, system-ui, sans-serif;
+  background: #f4f8f5;
+  color: #18251d;
+  --genplan-green-900: #0b2b20;
+  --genplan-green-800: #123d2b;
+  --genplan-green-700: #245c43;
+  --genplan-green-600: #367653;
+  --genplan-green-200: #dfeee5;
+  --genplan-green-100: #edf5ef;
+  --genplan-surface: #ffffff;
+  --genplan-surface-soft: #f7f9f7;
+  --genplan-border: #dce5de;
+  --genplan-text: #18251d;
+  --genplan-text-soft: #6b776e;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #f4f8f5 0%, #edf5ef 100%);
+  color: var(--genplan-text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button, input, select, textarea {
+  font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.card {
+  background: rgba(255,255,255,0.96);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--genplan-border);
+  box-shadow: 0 12px 28px rgba(11, 43, 32, 0.06);
+  border-radius: 20px;
+}
+
+.metric-card {
+  background: linear-gradient(180deg, #ffffff 0%, #f8faf8 100%);
+  border: 1px solid var(--genplan-border);
+  box-shadow: 0 12px 24px rgba(11, 43, 32, 0.06);
+  border-radius: 18px;
+  padding: 1rem 1rem 1.1rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.metric-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 100%;
+  height: 4px;
+  background: linear-gradient(90deg, var(--genplan-green-800), var(--genplan-green-600));
+}
+
+.recharts-cartesian-grid line {
+  stroke: rgba(36, 92, 67, 0.18);
+}
+
+.recharts-tooltip-wrapper {
+  outline: none;
+}
+
+.recharts-default-tooltip {
+  border-radius: 12px !important;
+  border: 1px solid var(--genplan-border) !important;
+  box-shadow: 0 12px 24px rgba(11, 43, 32, 0.08) !important;
+}
+
