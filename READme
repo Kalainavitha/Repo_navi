@@ -1,0 +1,165 @@
+# Handover: MPV_Outreach_engine (GenPlan)
+
+Backend = FastAPI + SQLite (`backend/`), frontend = Vite + React + Tailwind (`frontend/`).
+The project was renamed from `D:\Repo_navi` (user `navit`) to `MPV_Outreach_engine`.
+
+## 0. Folder layout and Python environments (read this first)
+- **Navitha's laptop:** the project's original home is `D:\Repo_navi` (so `D:\Repo_navi\backend` and `D:\Repo_navi\frontend`). Copy the project folder there. `backend\.venv` is her original virtual environment (built for `D:\Repo_navi\backend\.venv`, Python 3.14 at `C:\Users\navit\AppData\Local\Python\pythoncore-3.14-64`). It already contains FastAPI, Uvicorn, SQLAlchemy, Pydantic, PyMuPDF, python-docx and python-multipart, so the app runs from it unchanged.
+  - Run the backend: `cd D:\Repo_navi\backend` then `.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001`
+  - Only `pytest` and `httpx` are missing there (needed just to run tests): `.venv\Scripts\python.exe -m pip install pytest httpx`
+  - If the project is placed at a different path, or her Python moved, recreate it: `py -3.14 -m venv .venv` then `.venv\Scripts\python.exe -m pip install -e ".[test]"`.
+- **Rajna's laptop** (`C:\Users\rajna\Downloads\MPV_Outreach_engine\MPV_Outreach_engine`): `backend\.venv_rajna_local` is the working environment here. Run the backend with `.venv_rajna_local\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001` and tests with `.venv_rajna_local\Scripts\python.exe -m pytest`. Use `python -m ...` rather than `pip.exe` / `uvicorn.exe`, because those launchers remember the old folder name.
+- The source code has no machine-specific paths. Only the virtual environments are laptop-specific, which is why `.venv*` folders are git-ignored and must not be copied to a different path.
+- `frontend/node_modules` works on any Windows laptop; if it ever misbehaves, delete it and run `npm install`.
+- **What to send / what to leave out:** send `backend/`, `frontend/`, `HANDOVER.md`, `.gitignore`. Leave out `frontend/node_modules`, `frontend/dist`, `backend/.venv_rajna_local`, every `__pycache__` and `.pytest_cache` (all regenerated). `backend/genplan.db` is the local database: include it only if she should see the same demo data (2 projects, 4 team members); leave it out for a clean start, because the app creates a new empty database on first run.
+- **Verified before handover** (clean copy with no venv, no node_modules, no database): backend 87/87 tests pass using the same package versions as Navitha's `.venv` (fastapi 0.162.0, pydantic 2.14.1, SQLAlchemy 2.1.6, PyMuPDF 1.28.2, python-docx 1.2.0), the app creates its own database on first start, and `npm ci` + `npm run build` + 38/38 frontend tests pass. Not testable from Rajna's laptop: her exact Python path and the `D:\Repo_navi` location.
+
+## 1. Run it (two terminals)
+
+**Backend** (from `backend/`, the port MUST be 8001 because the frontend calls `http://127.0.0.1:8001`).
+Use the virtual environment that already exists (`.venv` on Navitha's laptop, `.venv_rajna_local` on Rajna's) and skip the two setup lines unless you have to create a new one:
+```
+# only if there is NO working virtual environment yet:
+py -3.14 -m venv .venv
+.venv\Scripts\python.exe -m pip install -e ".[test]"
+
+# always:
+.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+```
+API docs: http://127.0.0.1:8001/docs (the root `/` returns 404 on purpose, routes live under `/api/...`).
+
+**Frontend** (from `frontend/`):
+```
+npm install
+npm run dev
+```
+App: http://localhost:5173 (CORS only allows ports 5173-5176).
+
+**Tests**
+```
+cd backend;  .venv\Scripts\python.exe -m pytest          # 87 tests
+cd frontend; npx vitest run                              # 38 tests
+cd frontend; npm run build                               # typecheck + production build
+```
+
+**Using the app:** there is no login or user switcher. Anyone can edit and reassign tasks and change task status; the Team Lead role in Team Info is only a label.
+
+## 2. Why "Unable to reach the GenPlan backend" appeared (root causes)
+1. Backend not running, or running on a different port (8000) than the frontend expects (8001).
+2. Frontend dev server not running / wrong browser URL (use http://localhost:5173).
+3. `backend/.venv` was copied from another PC and pointed to a Python that does not exist here.
+4. A `frontend/.env*` with `VITE_API_BASE_URL` pointing somewhere else (none exists now).
+
+## 3. Environment fixes
+| Path | Change | Why |
+|------|--------|-----|
+| `backend/.venv`, `backend/.venv_rajna_local` | Round 9: `.venv` is Navitha's original environment again (for `D:\Repo_navi`); the one built on Rajna's laptop is `.venv_rajna_local`. See section 0. | A virtual environment is tied to the folder and Python path it was created in. |
+
+## 4. Feature changes (what, where, why)
+
+### Plan generator (the "copies the first plan" problem + realism)
+Root causes: tasks came from fixed keyword templates matched as substrings (`"ui"` matched "build"), `Web Application` forced Frontend/Backend/Integration on every story, the project description was never read, experience barely mattered, load balancing was a no-op, and other projects' bookings were ignored.
+
+| File | Change |
+|------|--------|
+| `backend/app/planning.py` | **Rewritten.** Whole-word story analysis; task titles, descriptions and one-line summaries are unique per task and built from the story's own wording; effort scales with story size, project complexity and risky keywords (payments, SSO, real-time...); project setup and release/UAT tasks added for 3+ stories; QA effort follows dev effort. **Assignment:** High-priority tasks go to the most experienced qualified person, Low-priority work leans to less-loaded/junior people; every candidate is dry-run against live calendars and the most experienced one wins unless they would finish noticeably later. **Cross-project:** `generate_plan(..., existing_bookings)` and `reschedule_tasks(..., existing_bookings)` subtract hours already booked on other projects, so nobody is double-booked. **Risks:** structured list (deadline overrun, thin buffer vs `buffer_percent`, overload, shared with other projects, single point of failure, skill mismatch, junior on High task, large tasks) with `risk_level`, `risk_score`, per-task `risk_level`/`risk_note`, and a per-task `rationale` explaining the assignee. A failed schedule no longer leaves hours reserved in the calendar. |
+| `backend/app/main.py` | `other_project_bookings()` + `delete_project_tasks()` helpers; plan generation/reschedule pass other projects' bookings; **fixed:** daily allocations were not deleted when regenerating, re-uploading a document or deleting a project (foreign-key errors); startup migration adds `team_members.is_lead`, `tasks.risk_level`, `tasks.risk_note`; new `GET /api/team-members/{id}/allocations`; new `GET /api/calendar?month=YYYY-MM`; (historical: `PATCH /api/tasks/{id}` used to return 403 for non-leads; that lock was removed in round 6 and anyone can edit tasks now); editing a member only reschedules projects when scheduling fields change. |
+| `backend/app/models.py`, `backend/app/schemas.py` | `TeamMember.is_lead`, `Task.risk_level`, `Task.risk_note`; `is_lead` on member create/update. |
+
+### Task "View" shows the task's own summary
+Cause: the generator never set `Task.summary`, so the UI fell back to the shared story/project text. Now every task has its own summary; the View popup shows summary, details, "Done when", why this person was chosen, and the risk note. (`frontend/src/App.tsx`, `GeneratedPlanView`.)
+
+### Team lead only can edit/reassign
+`frontend/src/App.tsx` (Viewing-as dropdown in the header, Team Lead checkbox in the member form, Edit buttons hidden unless the viewer is a lead), `frontend/src/lib/api.ts` (sends `X-Acting-Member-Id`), enforced server-side in `backend/app/main.py`. **Note:** there is no password login; "Viewing as" is a role switch, not security.
+
+### Team Info: project allocations and hours
+`frontend/src/components/MemberAllocationsModal.tsx` (new) opened by the **Allocations** button on each member card: per-project hours and tasks, hours remaining, weekly hours vs capacity.
+
+### Home dashboard (round 2: cleaner, one create button)
+`frontend/src/components/dashboard/HomeDashboard.tsx`, `ChartsCard.tsx`, `CalendarCard.tsx`:
+- Hero greeting is general ("Good evening! Welcome to GenPlan 👋", no personal name); the `viewerName` prop was removed.
+- Compact hero with the **only** create button on the home page; the Quick Actions card and the "Team" button were removed. The sidebar "Create Plan" link is navigation and stays.
+- 3 KPI cards: Total Projects, Active Projects, Team Members (**Tasks in Progress removed**), with loading skeletons.
+- The four charts are now **one small "Insights" card with tabs** (Projects / Tasks / Workload / Timeline), `ChartsCard.tsx`.
+- Smaller month calendar (compact cells, max 3-4 events listed per day with scroll) next to the charts and Upcoming Deadlines.
+- Recent Projects shows a risk chip; friendly empty state when there are no projects.
+- `backend/app/main.py` `get_dashboard()`: each `recent_projects` item now includes `risk_level`.
+- `frontend/src/App.tsx`: the big "Plan smarter. Deliver better." header was replaced by a slim top bar (breadcrumb + status + a Create/Generate button on every page **except Home**); the browser tab title follows the page.
+
+### Round 10: new members join projects, report downloads, Reload Plan removed
+- **Reload Plan button removed** from the Generated Plan page (`frontend/src/App.tsx`).
+- **Weekly report downloads:** the single ".md" button is now a **Download** menu with **Word (.docx)**, **PDF** and **CSV (Excel)** (`frontend/src/components/WeeklyReportModal.tsx`). The files are real documents generated by the backend (`backend/app/report_export.py`, `GET /api/projects/{id}/report/export?format=docx|pdf|csv&week=`) with python-docx, PyMuPDF and the csv module, all already installed. `frontend/src/lib/api.ts` has a `downloadFile` helper. "Copy text" is unchanged.
+- **New team members now join existing projects and get work:**
+  - Adding a person (`POST /api/team-members`) adds them to every active (non-archived) project that has a plan, then hands them **unstarted (Pending) tasks** they are the best fit for (`rebalance_unstarted` in `backend/app/planning.py`, `rebalance_project` / `join_active_projects` in `backend/app/main.py`). Tasks that are In process, Halted or Completed never move; nobody except a newcomer takes over a task; capacity, leave, dependencies and other projects' bookings are respected; Pending tasks are re-scheduled from today.
+  - **Plans are always built for the whole team as it is now:** Generate / Regenerate Plan adds every team member to the project first.
+  - **For people added before this change** (they are on the team but not on old projects) the Generated Plan page shows **Assign new members (N)**, which calls `POST /api/projects/{id}/rebalance`. A second press changes nothing.
+  - Because everyone now joins every plan, a team member can no longer be "left out" of a project except by marking them unavailable.
+- Tests now: backend 87, frontend 38 (`backend/tests/test_new_members.py`, new export tests in `test_report.py`, more cases in `frontend/src/smart.test.tsx`).
+
+### Round 8: four "smart tools" (the unique features)
+All offline and deterministic (no paid AI, no internet).
+1. **On-time forecast** (`backend/app/forecast.py`, `GET /api/projects/{id}/forecast`, `frontend/src/components/ForecastCard.tsx`): re-runs the unfinished work 300 times with random estimate overruns (wider for complex projects and risky tasks, seeded so it is repeatable) and reports the chance of meeting the deadline, the most likely and a safe (85%) finish date, a spread chart and the tasks most often on the critical path. The headline numbers are also stored on the plan summary (`on_time_probability`, `forecast_p50`, `forecast_p85`) and a "forecast" risk is added when the odds are under 70%.
+2. **Delay impact + Re-plan from today** (`planning.replan_from`, `GET /api/projects/{id}/impact`, `POST /api/projects/{id}/replan`, `ReplanModal.tsx`): shows overdue/halted tasks, the finish date before and after, the slip and every task that moves; Apply keeps completed tasks and assignees and only moves unfinished work to today or later, around leave/holidays and other projects' bookings. The plan header button shows a "N late" badge. Both endpoints accept an optional `?today=YYYY-MM-DD` (used by tests).
+3. **Estimate Coach** (`backend/app/learning.py`, `GET /api/estimate-accuracy`, `EstimateCoachCard.tsx` on Team Info): compares planned vs actual working days (In process to Completed) per person and phase, needs 3 finished tasks, clamps outliers (0.5-2.5x), ignores history older than 180 days and shrinks small samples towards "no change". New plans stretch or trim that person's estimates and explain it in the task's rationale. Needs `Task.started_at` / `Task.completed_at`, now set automatically when a status changes (new columns added by the startup migration).
+4. **Weekly status report** (`backend/app/report.py`, `GET /api/projects/{id}/report?week=`, `WeeklyReportModal.tsx`): overall status (On track / At risk / Late with reasons), progress, completed this week, in progress, blocked/overdue, next week's hours per person, top risks and the forecast; week picker, **Copy text** and **Download .md**.
+- Honest limits: the Estimate Coach and "completed this week" depend on people updating statuses promptly; plans created before this change have no timestamps, so they contribute nothing to learning.
+- Tests: backend 75, frontend 33 (`test_replan.py`, `test_forecast.py`, `test_learning.py`, `test_report.py`, `src/smart.test.tsx`).
+
+### Round 7: Insights card removed, paged Upcoming Deadlines beside the calendar
+- Home: the **Insights** card (Tasks/Timeline charts) and `frontend/src/components/dashboard/ChartsCard.tsx` were deleted.
+- New `frontend/src/components/dashboard/UpcomingDeadlines.tsx`, placed in the same row as the calendar (`HomeDashboard.tsx`). Everything is inside that one window: **5 rows visible at once**, **10 deadlines per page** (scroll inside the window for rows 6-10), the **11th deadline starts page 2**, with Previous/Next (only when there is more than one page) and a "Page 1 of 2" counter (shows "Page 1 of 1" when everything fits). The constants `DEADLINES_PER_PAGE` and `DEADLINES_VISIBLE` are at the top of that file.
+- The deadlines window is the same height as the calendar (the row uses `items-stretch`, the window is `h-full`); unused space stays blank and the page counter sits at the bottom.
+- `backend/app/main.py`: the dashboard used to return only 5 upcoming deadlines; it now returns up to 100 (`UPCOMING_DEADLINE_LIMIT`), soonest first.
+- Tests now: backend 47, frontend 26.
+
+### Round 6: "Signed in as" removed, anyone can edit
+The sidebar account card and the Team-Lead-only rule were removed at the user's request. `frontend/src/App.tsx` (no `viewingAs` state, Edit buttons shown on active plans for everyone), `frontend/src/lib/api.ts` (no `X-Acting-Member-Id` header), `backend/app/main.py` (`PATCH /api/tasks/{id}` no longer returns 403). `is_lead` / the Team Lead role still exist as a label and badge. Tests updated (backend 46, frontend 22). To bring the lock back later, restore the header check in `update_task` and a way to identify the user (a real login).
+
+### Round 5: plan audit, status editing, project chart removed
+- **Audit of generated plans** (`backend/tests/test_plan_audit.py`, 11 tests): realistic teams (seniors/juniors, part-time, leave, late joiner, early leaver, thin team, 3 overlapping projects, big backlog, tight and impossible deadlines) are checked for: nobody over daily capacity (including other projects), no work on weekends/holidays/leave/outside availability, hours add up, dependencies respected, High-priority work on more experienced people than Low, no manager given build/test work when a developer can do it, tight deadlines handled, impossible deadlines reported.
+- **Planner fixes found by the audit** (`backend/app/planning.py`): a manager/Team Lead with no matching skill is no longer handed build/test work if a developer can take it (`_is_manager_only`); High-priority tasks stay with someone with 2+ years while they can still meet the deadline; if the experience-first plan would miss the deadline, a **deadline-first** plan is tried and used only if it finishes earlier (plan summary `schedule_mode`, plus a visible "deadline_first" risk).
+- **Task status editing:** every task row and the View popup now have a status dropdown (Yet to start / In process / Halted / Completed); it is disabled on archived plans (`App.tsx`). `PATCH /api/tasks/{id}` now keeps `remaining_hours` in step (Completed = 0, reopened = full effort) and only marks a task "manually edited" for non-status changes (`main.py`).
+- **Home:** the Projects donut was removed; the Insights card now has only **Tasks** and **Timeline** tabs (`dashboard/ChartsCard.tsx`).
+- Tests at that point: backend 46, frontend 23.
+
+### Round 4: short task summary, no repeated story text
+Cause: plans made by older versions stored the whole user story in every task (and the "summary" was the first sentence of it). Pasted document headings ("User Story: X ... Story ID DASH-001 Priority Medium") also leaked into task names.
+- `backend/app/planning.py`: `_clean_heading()` strips document metadata and repeated phrases from story titles; the feature name is quoted in summaries ("for “See a simple dashboard…”") so verb-style names read correctly; stories without an "I want…" sentence get neutral wording instead of echoing the heading.
+- `backend/app/main.py`: tasks from old plans (no stored summary) now get a short task-specific summary on read (`_legacy_task_summary`, e.g. "Backend work for “Dashboard Landing Page”."); the task JSON has a new `summary_source` (`task` or `derived`).
+- `frontend/src/App.tsx`: the task **View** popup shows only the short summary for old plans (`derived`); for new plans it also shows details, "Done when", why the person was chosen, and the risk. New **Regenerate Plan** button (next to Reload Plan, with a confirmation) rebuilds the tasks from the stored stories with the current planner. **Old plans keep their old tasks until you press it.** It resets task progress and manual edits.
+- Tests: `backend/tests/test_planner_realism.py` (+2), `test_team_features.py` (+1), `frontend/src/features.test.tsx` (+2).
+- Tip: on a PC with little free RAM, `tsc` or `vitest` may crash with exit code 134 (out of memory). Close browsers/other apps, or run `npx vitest run --no-file-parallelism`.
+
+### Round 3: team form, Team Info graph, Active Projects moved
+- **Home:** the "Active Projects" card and the "Workload" chart tab were removed (`HomeDashboard.tsx`, `dashboard/ChartsCard.tsx`: tabs are now Projects / Tasks / Timeline). **Active Projects** now shows as a count tile at the top of the **Generated Plan** page (`App.tsx`).
+- **Team Info graph:** new `frontend/src/components/TeamWorkloadChart.tsx` (stacked bars: hours per person per project, with each person's hours/day on the axis and weekly hours below). Data comes from the new `GET /api/team-workload` in `backend/app/main.py` (active, non-archived projects only).
+- **Add/Edit team member form** (`frontend/src/App.tsx`): email is optional (still format-checked if typed); new optional **Additional Role** dropdown; **Team Lead** added to the role list; **Additional Skills**, **Allocation Percentage**, **Notes** and the Team Lead checkbox were removed (skills are now one comma-separated field). New members get 100% allocation automatically; the planner decides how much work each person gets from their working hours, leave and existing bookings on other projects.
+- **Team Lead is role-based (label only since round 6):** if the role or the additional role is "Team Lead", the backend sets `is_lead` automatically (`has_lead_role()` in `main.py`, on create, update and add-to-project). Removing the role removes the right. That person still has to be chosen under **Signed in as** to see the Edit buttons.
+- **Backend:** `TeamMember.additional_role` (new column added by the startup migration, `models.py`/`schemas.py`); the planner counts the additional role when matching people to tasks (`planning.py` `_fit_score`).
+- Tests: `backend/tests/test_team_features.py` (+3), `frontend/src/features.test.tsx` (rewritten for the new form/charts, +4).
+- Cards, the details popup and the allocations popup no longer show an "Allocation %".
+
+### (Removed in round 6) "Viewing as" / "Signed in as"
+`frontend/src/App.tsx`: moved from the header into an **account card at the bottom of the sidebar** (avatar initials, name, Team Lead badge, "Signed in as" dropdown). Collapsed sidebar shows just the avatar (click opens the sidebar). Behaviour is unchanged: choose a Team Lead to get the task Edit buttons; the choice is remembered in the browser.
+
+### Risks panel
+`frontend/src/components/RiskPanel.tsx` + `severity.ts` (new) on top of the generated plan; old saved plans with string risks still display.
+
+### Other new/changed frontend files
+`frontend/src/components/ui.tsx` (shared `ModalShell`, `Fact`, `SeverityBadge`, moved out of App.tsx), `frontend/src/types.ts` (new types), `frontend/src/App.tsx` (category tiles now have `aria-pressed`).
+
+### Tests
+Backend: `tests/conftest.py` (shared client fixture), `tests/test_planner_realism.py`, `tests/test_team_features.py`.
+Frontend: `src/features.test.tsx` (new); `src/App.test.tsx` fixed (its category-filter test was already failing: tasks had no assignee and it matched text that is never rendered).
+
+## 5. Files that were already modified before this work (not part of it)
+`frontend/index.html`, `frontend/package-lock.json`, `frontend/src/index.css` (responsive/layout tweaks and a lockfile refresh) show as modified in `git status` but were changed earlier by someone else.
+
+## 6. Things to know
+- `backend/genplan.db` holds real data and is git-ignored. Existing plans keep their old tasks; **regenerate** a plan (Create Plan again) to get the new task split, summaries and risks.
+- All projects share the whole team, which is why cross-project load matters; a person's hours are shared across every non-archived, unfinished project.
+- Not done on purpose: real login/passwords, AI-written tasks (the generator is deterministic and works offline).
+- The Vite build prints a "chunks larger than 500 kB" notice; it is advisory only.
+
+## 7. Open issues
+- None known. The member form's labels are not linked to their inputs (pre-existing, accessibility only).

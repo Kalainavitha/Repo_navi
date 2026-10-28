@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type InputHTMLAttributes, type ReactNode } from 'react'
 import { BrowserRouter, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { AlertTriangle, Archive, CheckCircle2, Clock3, FilePlus2, FileText, FolderKanban, House, Menu, Pencil, Plus, Rocket, Search, Users, Wrench, X } from 'lucide-react'
+import { Archive, ClipboardList, Crown, FilePlus2, FileText, FolderKanban, House, Menu, Pencil, Plus, RefreshCw, Rocket, Search, Users, Wrench, X } from 'lucide-react'
 import { apiFetch, previewDocument, uploadDocument } from './lib/api'
-import type { DailyWorkload, DashboardData, Member, ProjectFormState, SavedProject, Story, Task } from './types'
+import type { DashboardData, Member, ProjectFormState, SavedProject, Story, Task } from './types'
+import { Fact, ModalShell, SeverityBadge } from './components/ui'
+import { RiskPanel } from './components/RiskPanel'
+import { MemberAllocationsModal } from './components/MemberAllocationsModal'
+import { TeamWorkloadChart } from './components/TeamWorkloadChart'
+import { ForecastCard } from './components/ForecastCard'
+import { ReplanModal } from './components/ReplanModal'
+import { WeeklyReportModal } from './components/WeeklyReportModal'
+import { EstimateCoachCard } from './components/EstimateCoachCard'
+import { HomeDashboard } from './components/dashboard/HomeDashboard'
 
 const projectTypes = ['Web Application', 'Mobile Application', 'Desktop Application', 'API or Backend System', 'AI/ML Application', 'Data Engineering Platform', 'E-commerce Platform', 'Enterprise Software', 'Cloud Migration', 'DevOps or Infrastructure', 'Cybersecurity Project', 'IoT Application', 'Other']
-const roleOptions = ['Project Manager', 'Frontend Developer', 'Backend Developer', 'QA Engineer', 'Product Manager', 'UX Designer', 'DevOps Engineer', 'Data Engineer', 'Security Engineer', 'Business Analyst']
+const roleOptions = ['Team Lead', 'Project Manager', 'Frontend Developer', 'Backend Developer', 'QA Engineer', 'Product Manager', 'UX Designer', 'DevOps Engineer', 'Data Engineer', 'Security Engineer', 'Business Analyst', 'Full-Stack Developer']
 const workingDaysOptions = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 const navItems = [
   { label: 'Home', to: '/', icon: House },
@@ -16,14 +24,16 @@ const navItems = [
   { label: 'Archive', to: '/archive', icon: Archive },
 ] as const
 
+const pageTitles: Record<string, string> = {
+  '/': 'Home',
+  '/create-plan': 'Create Plan',
+  '/team-info': 'Team Info',
+  '/generated-plan': 'Generated Plan',
+  '/archive': 'Archive',
+}
+
 const inputClassName = 'w-full rounded-xl border border-[#DCE5DE] bg-white px-3 py-2.5 text-sm text-[#18251D] shadow-sm transition focus:border-[#123D2B] focus:outline-none focus:ring-2 focus:ring-[#123D2B]/10'
 const selectClassName = `${inputClassName} appearance-none`
-const standardTaskCategories = ['UI/Frontend', 'Backend', 'QA/Testing', 'Integration', 'DevOps/Deployment', 'Documentation', 'Planning & Analysis', 'Other']
-
-function taskCategory(task: Task) {
-  const category = (task.category || '').trim().toLowerCase()
-  return standardTaskCategories.find((value) => value.toLowerCase() === category) ?? 'Other'
-}
 
 const defaultForm: ProjectFormState = {
   name: 'Customer Portal Modernization',
@@ -57,34 +67,38 @@ type MemberFormValues = {
   name: string
   email: string
   role: string
+  additional_role: string
   experience: string
   primary_skills: string
-  additional_skills: string
   skill_proficiency: string
   hours_per_day: string
   working_days: string
-  availability_start: string
-  availability_end: string
   leave_dates: string
-  allocation: string
-  notes: string
 }
 
 const emptyMemberForm: MemberFormValues = {
   name: '',
   email: '',
   role: 'Frontend Developer',
+  additional_role: '',
   experience: '3',
-  primary_skills: 'react',
-  additional_skills: 'typescript, ui',
+  primary_skills: 'react, typescript',
   skill_proficiency: 'Intermediate',
   hours_per_day: '8',
   working_days: 'Monday, Tuesday, Wednesday, Thursday, Friday',
-  availability_start: '',
-  availability_end: '',
   leave_dates: '',
-  allocation: '80',
-  notes: '',
+}
+
+function todayIso() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+// Changes whenever a task's status, date or owner changes, so the smart cards refresh with the plan.
+function planSignature(plan: any): string {
+  if (!plan) return 'none'
+  const tasks = (plan.tasks ?? []) as Task[]
+  return `${plan.project_id}:${tasks.map((task) => `${task.status}${task.end_date ?? ''}${task.assignee_id ?? ''}`).join('|')}`
 }
 
 function FormField({ label, required = false, children, error }: { label: string; required?: boolean; children: ReactNode; error?: string }) {
@@ -120,19 +134,491 @@ function SelectField({ label, required, value, onChange, error, children }: { la
   )
 }
 
-function DateField({ label, required, value, onChange, error }: { label: string; required?: boolean; value: string; onChange: (event: ChangeEvent<HTMLInputElement>) => void; error?: string }) {
-  return (
-    <FormField label={label} required={required} error={error}>
-      <input type="date" value={value} onChange={onChange} className={inputClassName} />
-    </FormField>
-  )
+const standardTaskCategories = ['UI/Frontend', 'Backend', 'QA/Testing', 'Integration', 'DevOps/Deployment', 'Documentation', 'Planning & Analysis', 'Other']
+
+function taskCategory(task: Task) {
+  const category = (task.category || '').trim().toLowerCase()
+  return standardTaskCategories.find((value) => value.toLowerCase() === category) ?? 'Other'
 }
 
-function TextAreaField({ label, required, value, onChange, error }: { label: string; required?: boolean; value: string; onChange: (event: ChangeEvent<HTMLTextAreaElement>) => void; error?: string }) {
+const statusOptions = [
+  { label: 'Yet to start', value: 'Pending' },
+  { label: 'In process', value: 'In Progress' },
+  { label: 'Halted', value: 'Blocked' },
+  { label: 'Completed', value: 'Completed' },
+]
+const priorityOptions = ['High', 'Medium', 'Low']
+const statusSelectTone: Record<string, string> = {
+  Pending: 'border-slate-200 bg-slate-50 text-slate-600',
+  'In Progress': 'border-[#CFE4D7] bg-[#EAF2EC] text-[#245C43]',
+  Blocked: 'border-amber-200 bg-amber-50 text-amber-800',
+  Completed: 'border-[#123D2B] bg-[#123D2B] text-white',
+}
+
+const statusColors: Record<string, string> = {
+  Pending: '#94A3B8',
+  'In Progress': '#367653',
+  Blocked: '#F59E0B',
+  Completed: '#123D2B',
+}
+const priorityBadge: Record<string, string> = {
+  Critical: 'bg-red-100 text-red-700',
+  High: 'bg-orange-100 text-orange-700',
+  Medium: 'bg-amber-50 text-amber-700',
+  Low: 'bg-[#EAF2EC] text-[#245C43]',
+}
+
+const fieldClass = 'w-full rounded-xl border border-[#DCE5DE] bg-white px-3 py-2.5 text-sm text-[#18251D] shadow-sm transition focus:border-[#123D2B] focus:outline-none focus:ring-2 focus:ring-[#123D2B]/10 disabled:cursor-not-allowed disabled:bg-[#F7F9F7] disabled:text-[#6B776E]'
+const smallFieldClass = 'w-full rounded-lg border border-[#DCE5DE] bg-white px-2 py-2 text-xs text-[#18251D] focus:border-[#123D2B] focus:outline-none focus:ring-2 focus:ring-[#123D2B]/10'
+const labelClass = 'mb-1 block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#245C43]'
+const boxClass = 'rounded-xl border border-[#DCE5DE] bg-white p-3 shadow-sm'
+
+const statusLabel = (value: string) => statusOptions.find((option) => option.value === value)?.label ?? value
+
+function formatDate(value: string) {
+  const parsed = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(parsed.getTime())) return value
+  return parsed.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+}
+
+function shortSummary(task: Task, max = 110) {
+  const text = (task.summary || task.description || '').replace(/\s+/g, ' ').trim()
+  if (!text) return task.title
+  const first = text.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? text
+  return first.length > max ? `${first.slice(0, max - 1).trimEnd()}…` : first
+}
+
+type Row = {
+  key: string
+  date: string
+  memberId: string
+  memberName: string
+  items: { task: Task; hours?: number }[]
+}
+
+type GeneratedPlanViewProps = {
+  plan: any
+  members: Member[]
+  onStatusChange: (taskId: string, status: string) => void | Promise<void>
+  onAssign: (taskId: string, memberId: string) => void | Promise<void>
+  canReassign?: boolean
+}
+
+const defaultFilters = { category: 'All Tasks', member: 'All Members', priority: 'All Priorities', status: 'All Statuses' }
+
+function GeneratedPlanView({ plan, members, onStatusChange, onAssign, canReassign = false }: GeneratedPlanViewProps) {
+  const [filters, setFilters] = useState(defaultFilters)
+  const [summaryTaskId, setSummaryTaskId] = useState<string | null>(null)
+  const [editTaskId, setEditTaskId] = useState<string | null>(null)
+  const [editAssignee, setEditAssignee] = useState('')
+  const [editStatus, setEditStatus] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [statusBusyId, setStatusBusyId] = useState<string | null>(null)
+  const readOnly = Boolean(plan?.archived)
+
+  // Anyone working on the plan can report progress; only reassigning/editing is limited to Team Leads.
+  const changeStatus = async (task: Task, next: string) => {
+    if (next === task.status || statusBusyId) return
+    setStatusBusyId(task.id)
+    try {
+      await onStatusChange(task.id, next)
+    } finally {
+      setStatusBusyId(null)
+    }
+  }
+
+  const statusSelect = (task: Task) => (
+    <select
+      aria-label={`Status of ${task.title}`}
+      value={task.status}
+      disabled={readOnly || statusBusyId === task.id}
+      onChange={(event) => void changeStatus(task, event.target.value)}
+      className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold focus:outline-none focus:ring-2 focus:ring-[#123D2B]/20 disabled:cursor-not-allowed disabled:opacity-60 ${statusSelectTone[task.status] ?? statusSelectTone.Pending}`}
+    >
+      {statusOptions.map((option) => <option key={option.value} value={option.value} className="bg-white text-[#18251D]">{option.label}</option>)}
+    </select>
+  )
+
+  const allocatedTasks = useMemo<Task[]>(
+    () => ((plan?.tasks ?? []) as Task[]).filter((task) => Boolean(task.assignee_id || task.assignee_name)),
+    [plan],
+  )
+  const taskById = useMemo(() => new Map(allocatedTasks.map((task) => [task.id, task])), [allocatedTasks])
+  const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members])
+
+  const categoryStats = useMemo(
+    () =>
+      standardTaskCategories
+        .map((category) => {
+          const list = allocatedTasks.filter((task) => taskCategory(task) === category)
+          return {
+            category,
+            count: list.length,
+            hours: list.reduce((sum, task) => sum + (task.effort_hours ?? 0), 0),
+            people: new Set(list.map((task) => task.assignee_name)).size,
+            done: list.filter((task) => task.status === 'Completed').length,
+          }
+        })
+        .filter((item) => item.count > 0),
+    [allocatedTasks],
+  )
+
+  const memberNames = useMemo(
+    () => [...new Set(allocatedTasks.map((task) => task.assignee_name).filter(Boolean) as string[])],
+    [allocatedTasks],
+  )
+
+  const matches = (task: Task) =>
+    (filters.category === 'All Tasks' || taskCategory(task) === filters.category) &&
+    (filters.member === 'All Members' || task.assignee_name === filters.member) &&
+    (filters.priority === 'All Priorities' || task.priority === filters.priority) &&
+    (filters.status === 'All Statuses' || task.status === filters.status)
+
+  const dailyWorkload: any[] = plan?.daily_workload ?? []
+  let rows: Row[] = []
+  if (dailyWorkload.some((day) => day.tasks?.length)) {
+    dailyWorkload.forEach((day) => {
+      const items = (day.tasks ?? [])
+        .map((item: any) => ({ task: taskById.get(item.id), hours: item.allocated_hours as number | undefined }))
+        .filter((entry: { task?: Task }) => entry.task && matches(entry.task)) as { task: Task; hours?: number }[]
+      if (items.length) rows.push({ key: `${day.date}-${day.member_id}`, date: day.date, memberId: day.member_id, memberName: day.member_name, items })
+    })
+  } else {
+    const grouped = new Map<string, Row>()
+    allocatedTasks.filter(matches).forEach((task) => {
+      const date = task.start_date || 'Unscheduled'
+      const key = `${date}-${task.assignee_id ?? task.assignee_name}`
+      const row = grouped.get(key) ?? { key, date, memberId: task.assignee_id ?? '', memberName: task.assignee_name ?? '', items: [] }
+      row.items.push({ task })
+      grouped.set(key, row)
+    })
+    rows = [...grouped.values()]
+  }
+  rows.sort((a, b) => {
+    const left = a.date === 'Unscheduled' ? '~' : a.date
+    const right = b.date === 'Unscheduled' ? '~' : b.date
+    return left === right ? a.memberName.localeCompare(b.memberName) : left.localeCompare(right)
+  })
+  const dateGroups = rows.reduce((map, row) => map.set(row.date, [...(map.get(row.date) ?? []), row]), new Map<string, Row[]>())
+
+  const summaryTask = summaryTaskId ? taskById.get(summaryTaskId) : undefined
+  const editTask = editTaskId ? taskById.get(editTaskId) : undefined
+  const focusMember: Member | undefined = filters.member !== 'All Members' ? members.find((member) => member.name === filters.member) : undefined
+
+  const completed = allocatedTasks.filter((task) => task.status === 'Completed').length
+  const progress = allocatedTasks.length ? Math.round((completed / allocatedTasks.length) * 100) : 0
+  const filtersActive = Object.entries(filters).some(([key, value]) => value !== (defaultFilters as Record<string, string>)[key])
+
+  const openEdit = (task: Task) => {
+    if (!canReassign) return;
+    setSummaryTaskId(null)
+    setEditAssignee(task.assignee_id ?? '')
+    setEditStatus(task.status)
+    setEditTaskId(task.id)
+  }
+
+  const saveEdit = async () => {
+    if (!editTask) return
+    setSaving(true)
+    try {
+      if (editStatus && editStatus !== editTask.status) await onStatusChange(editTask.id, editStatus)
+      if (editAssignee && editAssignee !== (editTask.assignee_id ?? '')) await onAssign(editTask.id, editAssignee)
+    } finally {
+      setSaving(false)
+      setEditTaskId(null)
+    }
+  }
+
+  const stages = (() => {
+    const levels = new Map<string, number>()
+    const levelOf = (id: string, seen: Set<string>): number => {
+      const cached = levels.get(id)
+      if (cached !== undefined) return cached
+      if (seen.has(id)) return 0
+      const deps = (taskById.get(id)?.dependencies ?? []).filter((dep) => taskById.has(dep))
+      const nextSeen = new Set(seen).add(id)
+      const level = deps.length ? Math.max(...deps.map((dep) => levelOf(dep, nextSeen))) + 1 : 0
+      levels.set(id, level)
+      return level
+    }
+    allocatedTasks.forEach((task) => levelOf(task.id, new Set()))
+    const max = Math.max(0, ...Array.from(levels.values()))
+    return Array.from({ length: max + 1 }, (_, index) => allocatedTasks.filter((task) => levels.get(task.id) === index))
+  })()
+
   return (
-    <FormField label={label} required={required} error={error}>
-      <textarea value={value} onChange={onChange} className={`${inputClassName} min-h-[110px] resize-y`} />
-    </FormField>
+    <div className="space-y-4">
+      <RiskPanel summary={plan?.summary} />
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="rounded-xl bg-[#F7F9F7] p-3">
+          <div className="text-xs uppercase tracking-[0.12em] text-[#6B776E]">Allocated Tasks</div>
+          <div className="mt-2 text-lg font-semibold text-[#18251D]">{allocatedTasks.length}</div>
+        </div>
+        <div className="rounded-xl bg-[#F7F9F7] p-3">
+          <div className="text-xs uppercase tracking-[0.12em] text-[#6B776E]">Progress</div>
+          <div className="mt-2 text-lg font-semibold text-[#18251D]">{progress}%</div>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-xl border border-[#DCE5DE] bg-[#F7F9F7] p-4 sm:flex-row sm:items-end sm:justify-between">
+        <label className="block w-full sm:max-w-xs">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-[#245C43]">Category</span>
+          <select value={filters.category} onChange={(event) => setFilters((current) => ({ ...current, category: event.target.value }))} className={fieldClass}>
+            <option value="All Tasks">All Tasks</option>
+            {categoryStats.map((item) => (
+              <option key={item.category} value={item.category}>{item.category} ({item.count})</option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          disabled={!filtersActive}
+          onClick={() => setFilters(defaultFilters)}
+          className="rounded-xl border border-[#DCE5DE] bg-white px-4 py-2.5 text-sm font-medium text-[#18251D] disabled:opacity-50"
+        >
+          Clear filters
+        </button>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+        <section className="@container min-w-0 rounded-xl border border-[#DCE5DE] bg-white p-4">
+          <div className="hidden gap-3 border-b border-[#DCE5DE] pb-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#245C43] @2xl:grid @2xl:grid-cols-[130px_160px_minmax(0,1fr)]">
+            <div>Date</div>
+            <div>Team Member</div>
+            <div>Scheduled Task</div>
+          </div>
+
+          {dateGroups.size ? (
+            <div className="mt-4 space-y-6">
+              {[...dateGroups.entries()].map(([date, dayRows]) => (
+                <div key={date} className="gap-3 @2xl:grid @2xl:grid-cols-[130px_minmax(0,1fr)]">
+                  <div className="relative mb-3 border-l-2 border-[#CFE4D7] pl-4 @2xl:mb-0">
+                    <span className="absolute -left-[7px] top-1 h-3 w-3 rounded-full bg-[#123D2B] ring-4 ring-white" />
+                    <div className="text-sm font-semibold text-[#18251D]">{date === 'Unscheduled' ? date : formatDate(date)}</div>
+                    <div className="text-xs text-[#6B776E]">{dayRows.reduce((sum, row) => sum + row.items.length, 0)} task(s)</div>
+                  </div>
+
+                  <div className="min-w-0 space-y-4">
+                    {dayRows.map((row) => (
+                      <div key={row.key} className="gap-3 @2xl:grid @2xl:grid-cols-[160px_minmax(0,1fr)]">
+                        <div className="mb-2 @2xl:mb-0">
+                          <div className="font-medium text-[#18251D]">{row.memberName}</div>
+                          <div className="text-xs text-[#6B776E]">{memberById.get(row.memberId)?.role ?? ''}</div>
+                        </div>
+
+                        <div className="min-w-0 space-y-2">
+                          {row.items.map(({ task, hours }) => (
+                            <div
+                              key={task.id}
+                              style={{ borderLeftColor: statusColors[task.status] ?? '#94A3B8' }}
+                              className="flex flex-col gap-2 rounded-xl border border-l-4 border-[#DCE5DE] bg-white p-3 shadow-sm @xl:flex-row @xl:items-center @xl:justify-between"
+                            >
+                              <div className="min-w-0">
+                                <div className="text-xs font-semibold text-[#245C43]">{task.id} · {taskCategory(task)}</div>
+                                <div className="truncate font-medium text-[#18251D]">{task.title}</div>
+                                <div className="truncate text-sm text-[#6B776E]">{shortSummary(task)}</div>
+                              </div>
+                              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                                <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${priorityBadge[task.priority] ?? 'bg-[#EAF2EC] text-[#245C43]'}`}>{task.priority}</span>
+                                {task.risk_level && task.risk_level !== 'Low' ? <SeverityBadge level={task.risk_level} /> : null}
+                                {statusSelect(task)}
+                                <span className="text-xs text-[#6B776E]">{hours ?? task.effort_hours}h</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setSummaryTaskId(task.id)}
+                                  className="rounded-lg bg-[#123D2B] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0B2B20]"
+                                >
+                                  View
+                                </button>
+                                {canReassign && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openEdit(task)}
+                                    className="rounded-lg border border-[#DCE5DE] bg-white px-3 py-1.5 text-xs font-semibold text-[#123D2B] hover:bg-[#EAF2EC]"
+                                  >
+                                    Edit
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-4 rounded-xl border border-dashed border-[#DCE5DE] bg-[#F7F9F7] p-6 text-center text-sm text-[#6B776E]">
+              No allocated tasks match the selected filters.
+            </div>
+          )}
+        </section>
+
+        <aside className="grid grid-cols-2 content-start gap-3 sm:grid-cols-4 lg:grid-cols-1">
+          <div className={boxClass}>
+            <label className="block">
+              <span className={labelClass}>Member</span>
+              <select value={filters.member} onChange={(event) => setFilters((current) => ({ ...current, member: event.target.value }))} className={smallFieldClass}>
+                <option value="All Members">All Members</option>
+                {memberNames.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </label>
+            {focusMember ? (
+              <div className="mt-2 space-y-0.5 rounded-lg bg-[#F7F9F7] p-2 text-[11px] text-[#6B776E]">
+                <div className="text-xs font-semibold text-[#18251D]">{focusMember.name}</div>
+                <div className="uppercase tracking-wide text-[#245C43]">{focusMember.role}</div>
+                <div>{focusMember.experience} yrs · {focusMember.hours_per_day}h/day</div>
+                <div className="break-words">Skills: {focusMember.skills.join(', ') || 'None'}</div>
+              </div>
+            ) : (
+              <p className="mt-2 text-[11px] text-[#6B776E]">Pick a member to see details.</p>
+            )}
+          </div>
+
+          <div className={boxClass}>
+            <label className="block">
+              <span className={labelClass}>Priority</span>
+              <select value={filters.priority} onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value }))} className={smallFieldClass}>
+                <option value="All Priorities">All Priorities</option>
+                {priorityOptions.map((priority) => <option key={priority} value={priority}>{priority}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className={boxClass}>
+            <label className="block">
+              <span className={labelClass}>Completion Status</span>
+              <select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} className={smallFieldClass}>
+                <option value="All Statuses">All Statuses</option>
+                {statusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className={`${boxClass} col-span-2 sm:col-span-4 lg:col-span-1`}>
+            <div className={labelClass}>Category Details</div>
+            {categoryStats.length ? (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-1">
+                {categoryStats.map((item) => (
+                  <button
+                    key={item.category}
+                    type="button"
+                    aria-pressed={filters.category === item.category}
+                    onClick={() => setFilters((current) => ({ ...current, category: current.category === item.category ? 'All Tasks' : item.category }))}
+                    className={`rounded-lg border p-2 text-left text-[11px] transition hover:border-[#245C43] ${filters.category === item.category ? 'border-[#123D2B] bg-[#EAF2EC]' : 'border-[#DCE5DE] bg-[#F7F9F7]'}`}
+                  >
+                    <div className="text-xs font-semibold text-[#18251D]">{item.category}</div>
+                    <div className="mt-0.5 text-[#6B776E]">{item.count} task(s) · {item.hours}h</div>
+                    <div className="text-[#6B776E]">{item.people} member(s) · {item.done} done</div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[11px] text-[#6B776E]">No allocated tasks yet.</p>
+            )}
+          </div>
+        </aside>
+      </div>
+
+      <details className="rounded-xl border border-[#DCE5DE] bg-white p-4">
+        <summary className="cursor-pointer text-sm font-semibold text-[#18251D]">Task dependency stages</summary>
+        <div className="mt-4 space-y-4">
+          {stages.map((stage, index) => stage.length ? (
+            <div key={`stage-${index}`}>
+              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#245C43]">Stage {index + 1}</div>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {stage.map((task) => (
+                  <div key={task.id} className="rounded-lg border border-[#DCE5DE] bg-[#F7F9F7] p-3 text-sm">
+                    <div className="font-semibold text-[#18251D]">{task.id} · {task.title}</div>
+                    <div className="mt-1 text-xs text-[#6B776E]">{task.assignee_name} · {task.effort_hours}h · {statusLabel(task.status)}</div>
+                    <div className="mt-1 text-[11px] text-[#6B776E]">{task.dependencies.length ? `Depends on: ${task.dependencies.join(', ')}` : 'Starting task'}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null)}
+        </div>
+      </details>
+
+      {summaryTask ? (
+        <ModalShell
+          subtitle={`${summaryTask.id} · ${taskCategory(summaryTask)}`}
+          title={summaryTask.title}
+          onClose={() => setSummaryTaskId(null)}
+          footer={
+            <>
+              {canReassign && (
+                <button type="button" onClick={() => openEdit(summaryTask)} className="rounded-xl border border-[#DCE5DE] bg-white px-4 py-2 text-sm font-medium text-[#123D2B] hover:bg-[#EAF2EC]">Edit</button>
+              )}
+              <button type="button" onClick={() => setSummaryTaskId(null)} className="rounded-xl bg-[#123D2B] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0B2B20]">Close</button>
+            </>
+          }
+        >
+          <p className="text-sm font-medium leading-relaxed text-[#18251D]">{shortSummary(summaryTask, 220)}</p>
+          {summaryTask.summary_source === 'task' && summaryTask.description && summaryTask.description !== summaryTask.summary ? (
+            <p className="mt-2 text-sm leading-relaxed text-[#6B776E]">{summaryTask.description}</p>
+          ) : null}
+          {summaryTask.summary_source === 'task' && summaryTask.acceptance_criteria?.length ? (
+            <div className="mt-3">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#6B776E]">Done when</div>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5 text-sm text-[#18251D]">
+                {summaryTask.acceptance_criteria.slice(0, 3).map((item) => <li key={item}>{item}</li>)}
+              </ul>
+            </div>
+          ) : null}
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <Fact label="Assigned to" value={summaryTask.assignee_name || '—'} />
+            <Fact label="Status" value={statusSelect(summaryTask)} />
+            <Fact label="Priority" value={summaryTask.priority} />
+            <Fact label="Effort" value={`${summaryTask.effort_hours}h`} />
+            <Fact label="Start" value={summaryTask.start_date || '—'} />
+            <Fact label="End" value={summaryTask.end_date || '—'} />
+          </div>
+          <div className="mt-2 rounded-lg bg-[#F7F9F7] p-2 text-xs text-[#6B776E]">
+            <span className="font-semibold text-[#18251D]">Depends on:</span> {summaryTask.dependencies.length ? summaryTask.dependencies.join(', ') : 'None'}
+          </div>
+          {summaryTask.rationale ? <div className="mt-2 rounded-lg bg-[#F7F9F7] p-2 text-xs text-[#6B776E]"><span className="font-semibold text-[#18251D]">Why this person:</span> {summaryTask.rationale}</div> : null}
+          {summaryTask.risk_note ? (
+            <div className={`mt-2 rounded-lg border px-3 py-2 text-xs ${summaryTask.risk_level === 'High' ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+              <span className="font-semibold">{summaryTask.risk_level} risk:</span> {summaryTask.risk_note}
+            </div>
+          ) : null}
+          {summaryTask.warning ? <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{summaryTask.warning}</div> : null}
+        </ModalShell>
+      ) : null}
+
+      {editTask ? (
+        <ModalShell
+          subtitle="Edit task"
+          title={`${editTask.id} · ${editTask.title}`}
+          onClose={() => { if (!saving) setEditTaskId(null) }}
+          footer={
+            <>
+              <button type="button" disabled={saving} onClick={() => setEditTaskId(null)} className="rounded-xl border border-[#DCE5DE] bg-white px-4 py-2 text-sm font-medium text-[#18251D] disabled:opacity-50">Cancel</button>
+              <button type="button" disabled={saving} onClick={() => void saveEdit()} className="rounded-xl bg-[#123D2B] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0B2B20] disabled:opacity-50">{saving ? 'Saving…' : 'Save'}</button>
+            </>
+          }
+        >
+          <div className="space-y-4">
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-[#245C43]">Assigned member</span>
+              <select value={editAssignee} onChange={(event) => setEditAssignee(event.target.value)} className={fieldClass}>
+                {members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-[#245C43]">Completion status</span>
+              <select value={editStatus} onChange={(event) => setEditStatus(event.target.value)} className={fieldClass}>
+                {statusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+          </div>
+        </ModalShell>
+      ) : null}
+    </div>
   )
 }
 
@@ -167,7 +653,9 @@ function AppShell() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const previewRequestId = useRef(0)
   const [teamSearch, setTeamSearch] = useState('')
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [selectedMember, setSelectedMember] = useState<Member | null>(null)
+  const [allocationsMember, setAllocationsMember] = useState<Member | null>(null)
+  const [sidebarOpen, setSidebarOpen] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth >= 768))
   const [memberFormOpen, setMemberFormOpen] = useState(false)
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null)
   const [memberFormValues, setMemberFormValues] = useState<MemberFormValues>(emptyMemberForm)
@@ -175,6 +663,7 @@ function AppShell() {
   const [memberFeedback, setMemberFeedback] = useState('')
   const archivedPlans = savedProjects.filter((item) => item.archived)
   const portfolioRequestId = useRef(0)
+
 
   const refreshPortfolio = async (preferredProjectId?: number) => {
     const requestId = ++portfolioRequestId.current
@@ -235,6 +724,66 @@ function AppShell() {
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
+  const isCreatePage = location.pathname === '/create-plan'
+  const isHomePage = location.pathname === '/'
+  const pageTitle = pageTitles[location.pathname] ?? 'Page not found'
+
+  useEffect(() => {
+    document.title = isHomePage ? 'GenPlan' : `${pageTitle} · GenPlan`
+  }, [isHomePage, pageTitle])
+
+  const handleHeaderAction = () => {
+    if (isCreatePage) {
+      void generatePlan()
+      return
+    }
+    resetCreatePlanForm()
+    navigate('/create-plan')
+  }
+
+  const [regenerating, setRegenerating] = useState(false)
+  const [replanOpen, setReplanOpen] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
+  const [assigningMembers, setAssigningMembers] = useState(false)
+  const missingMembers = plan ? members.filter((member) => !planMembers.some((onPlan) => onPlan.id === member.id)) : []
+  const lateTaskCount = plan
+    ? ((plan.tasks ?? []) as Task[]).filter((task) => task.status === 'Blocked' || (task.status !== 'Completed' && Boolean(task.end_date) && (task.end_date as string) < todayIso())).length
+    : 0
+  const assignNewMembers = async () => {
+    if (!plan?.project_id || assigningMembers) return
+    setAssigningMembers(true)
+    setError('')
+    try {
+      const outcome = await apiFetch<{ added_members: string[]; moved: unknown[] }>(`/api/projects/${plan.project_id}/rebalance`, { method: 'POST' })
+      await refreshPortfolio(plan.project_id)
+      setStatus(
+        outcome.added_members.length
+          ? `${outcome.added_members.join(', ')} joined the project and took ${outcome.moved.length} task${outcome.moved.length === 1 ? '' : 's'}`
+          : 'Everyone is already on this project',
+      )
+    } catch (assignError) {
+      setError(assignError instanceof Error ? assignError.message : 'The new members could not be assigned.')
+    } finally {
+      setAssigningMembers(false)
+    }
+  }
+
+  const regeneratePlan = async () => {
+    if (!plan?.project_id || regenerating) return
+    if (!window.confirm('Regenerate this plan? Tasks are rebuilt from the uploaded stories using the current team and their other projects. Task progress and manual edits will be reset.')) return
+    setRegenerating(true)
+    setError('')
+    try {
+      await apiFetch<unknown>(`/api/projects/${plan.project_id}/generate-plan`, { method: 'POST' })
+      await refreshPortfolio(plan.project_id)
+      setStatus('Plan regenerated')
+    } catch (regenerateError) {
+      setError(regenerateError instanceof Error ? regenerateError.message : 'The plan could not be regenerated.')
+    } finally {
+      setRegenerating(false)
+    }
+  }
+
   const openProject = async (projectId: number) => {
     try {
       const details = await apiFetch<SavedProject>(`/api/projects/${projectId}`)
@@ -249,8 +798,6 @@ function AppShell() {
         start_date: details.start_date,
         deadline: details.deadline ?? '',
       }))
-      setExpandedTaskId(null)
-      setPlanFilters({ category: 'All Tasks', member: 'All Members', status: 'All Statuses', sort: 'priority' })
       setError('')
       navigate(`/generated-plan?project_id=${projectId}`)
     } catch (loadError) {
@@ -258,64 +805,11 @@ function AppShell() {
     }
   }
 
-  const [planFilters, setPlanFilters] = useState({ category: 'All Tasks', member: 'All Members', status: 'All Statuses', sort: 'priority' })
-  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null)
-
-  const taskChartData = useMemo(() => {
-    return dashboard?.task_progress ?? []
-  }, [dashboard])
-
-  const filteredPlanTasks = useMemo(() => {
-    const tasks = plan?.tasks ?? []
-
-    return [...tasks]
-      .filter((task: Task) => {
-        const matchesCategory = planFilters.category === 'All Tasks' || taskCategory(task) === planFilters.category
-        const matchesMember = planFilters.member === 'All Members' || task.assignee_name === planFilters.member
-        const matchesStatus = planFilters.status === 'All Statuses' || task.status === planFilters.status
-        return matchesCategory && matchesMember && matchesStatus
-      })
-      .sort((a, b) => {
-        const direction = planFilters.sort === 'priority' ? 1 : -1
-        if (planFilters.sort === 'priority') {
-          const priorityWeight = { 'Critical': 4, 'High': 3, 'Medium': 2, 'Low': 1 }
-          return (priorityWeight[b.priority as keyof typeof priorityWeight] ?? 0) - (priorityWeight[a.priority as keyof typeof priorityWeight] ?? 0)
-        }
-        if (planFilters.sort === 'effort') return direction * (b.effort_hours - a.effort_hours)
-        if (planFilters.sort === 'schedule') return (new Date(a.start_date ?? '2099-01-01').getTime() - new Date(b.start_date ?? '2099-01-01').getTime())
-        return 0
-      })
-  }, [plan, planFilters])
-
-  const dailyWorkflow: DailyWorkload[] = plan?.daily_workload ?? []
-
-  const categoryBreakdown = useMemo(() => {
-    const tasks: Task[] = plan?.tasks ?? []
-    const categories = [...new Set([...standardTaskCategories, ...tasks.map(taskCategory)])]
-    return categories.map((category) => ({
-        category,
-        count: tasks.filter((task: Task) => taskCategory(task) === category).length,
-      }))
-  }, [plan])
-  const taskCategories = ['All Tasks', ...categoryBreakdown.map((group) => group.category)]
-
   const filteredMembers = useMemo(() => {
     const query = teamSearch.trim().toLowerCase()
     if (!query) return members
     return members.filter((member) => `${member.name} ${member.role} ${member.skills.join(' ')}`.toLowerCase().includes(query))
   }, [members, teamSearch])
-
-  const stats = useMemo(() => {
-    const metrics = dashboard?.metrics
-    return {
-      totalProjects: metrics?.total_projects ?? 0,
-      activeProjects: metrics?.active_projects ?? 0,
-      completedProjects: metrics?.completed_projects ?? 0,
-      teamMembers: metrics?.team_members ?? 0,
-      tasksInProgress: metrics?.tasks_in_progress ?? 0,
-      overdueTasks: metrics?.overdue_tasks ?? 0,
-    }
-  }, [dashboard])
 
   const handleProjectField = (field: keyof ProjectFormState, value: string | number | string[]) => {
     setProject((current) => ({ ...current, [field]: value }))
@@ -345,16 +839,12 @@ function AppShell() {
       email: member.email ?? '',
       role: member.role,
       experience: String(member.experience ?? 0),
-      primary_skills: member.skills[0] ?? '',
-      additional_skills: member.skills.slice(1).join(', '),
+      additional_role: member.additional_role ?? '',
+      primary_skills: member.skills.join(', '),
       skill_proficiency: 'Intermediate',
       hours_per_day: String(member.hours_per_day ?? 8),
       working_days: (member.working_days ?? workingDaysOptions.slice(0, 5)).join(', '),
-      availability_start: member.available_from ?? '',
-      availability_end: member.available_until ?? '',
       leave_dates: member.leave_dates.join(', '),
-      allocation: String(member.allocation ?? 100),
-      notes: member.notes ?? '',
     })
     setMemberFormErrors({})
     setMemberFeedback('')
@@ -378,14 +868,11 @@ function AppShell() {
   const validateMemberForm = () => {
     const errors: Record<string, string> = {}
     if (!memberFormValues.name.trim()) errors.name = 'Name is required.'
-    if (!memberFormValues.email.trim()) errors.email = 'Email address is required.'
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(memberFormValues.email)) errors.email = 'Enter a valid email address.'
+    if (memberFormValues.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(memberFormValues.email.trim())) errors.email = 'Enter a valid email address or leave it empty.'
     if (!memberFormValues.role.trim()) errors.role = 'Role is required.'
     if (!memberFormValues.experience || Number(memberFormValues.experience) < 0) errors.experience = 'Years of experience is required.'
-    if (!memberFormValues.primary_skills.trim()) errors.primary_skills = 'Primary skills are required.'
+    if (!memberFormValues.primary_skills.trim()) errors.primary_skills = 'Add at least one skill.'
     if (!memberFormValues.hours_per_day || Number(memberFormValues.hours_per_day) <= 0 || Number(memberFormValues.hours_per_day) > 24) errors.hours_per_day = 'Working hours must be between 1 and 24.'
-    if (!memberFormValues.allocation || Number(memberFormValues.allocation) <= 0 || Number(memberFormValues.allocation) > 100) errors.allocation = 'Allocation percentage must be greater than 0 and at most 100.'
-    if (memberFormValues.availability_start && memberFormValues.availability_end && new Date(memberFormValues.availability_end) < new Date(memberFormValues.availability_start)) errors.availability_end = 'Availability end date must be after the start date.'
     setMemberFormErrors(errors)
     return Object.keys(errors).length === 0
   }
@@ -396,7 +883,7 @@ function AppShell() {
       return
     }
 
-    const nextSkills = parseSkills(memberFormValues.primary_skills, memberFormValues.additional_skills)
+    const nextSkills = parseSkills(memberFormValues.primary_skills, '')
     const newMember = {
       name: memberFormValues.name.trim(),
       role: memberFormValues.role,
@@ -404,15 +891,15 @@ function AppShell() {
       experience: Number(memberFormValues.experience),
       hours_per_day: Number(memberFormValues.hours_per_day),
       working_days: memberFormValues.working_days.split(',').map((item) => item.trim()).filter(Boolean),
-      allocation: Number(memberFormValues.allocation),
-      available_from: memberFormValues.availability_start || null,
-      available_until: memberFormValues.availability_end || null,
+      available_from: null,
+      available_until: null,
       leave_dates: memberFormValues.leave_dates.split(',').map((item) => item.trim()).filter(Boolean),
-      email: memberFormValues.email,
-      notes: memberFormValues.notes,
+      email: memberFormValues.email.trim() || null,
+      additional_role: memberFormValues.additional_role || null,
     }
 
     try {
+      setMemberFeedback('Saving...')
       if (editingMemberId) {
         await apiFetch<Member>(`/api/team-members/${editingMemberId}`, { method: 'PATCH', body: JSON.stringify(newMember) })
       } else {
@@ -422,7 +909,9 @@ function AppShell() {
       setMemberFeedback(editingMemberId ? 'Member updated successfully.' : 'Member added successfully.')
       setTimeout(() => closeMemberForm(), 250)
     } catch (saveError) {
-      setMemberFeedback(saveError instanceof Error ? saveError.message : 'The team member could not be saved.')
+      console.error("Failed to save member:", saveError)
+      const msg = saveError instanceof Error ? saveError.message : 'The team member could not be saved.'
+      setMemberFeedback(msg)
     }
   }
 
@@ -587,242 +1076,89 @@ function AppShell() {
     }
   }
 
-  const projectStatusData = dashboard?.project_status ?? []
-
-  const workloadData = dashboard?.team_workload.map((member) => ({ ...member, name: member.name.split(' ')[0] })) ?? []
-
-  const overviewMetrics = [
-    { label: 'Total Projects', value: String(stats.totalProjects), note: 'All plans', link: '/generated-plan', icon: FolderKanban },
-    { label: 'Active Projects', value: String(stats.activeProjects), note: 'In motion', link: '/generated-plan', icon: Rocket },
-    { label: 'Completed Projects', value: String(stats.completedProjects), note: 'Closed', link: '/generated-plan', icon: CheckCircle2 },
-    { label: 'Team Members', value: String(stats.teamMembers), note: 'Available', link: '/team-info', icon: Users },
-    { label: 'Tasks in Progress', value: String(stats.tasksInProgress), note: 'Live workload', link: '/generated-plan', icon: Clock3 },
-    { label: 'Overdue Tasks', value: String(stats.overdueTasks), note: 'Needs attention', link: '/generated-plan', icon: AlertTriangle },
-  ]
-
-  const timelineData = dashboard?.project_timeline ?? []
+  const renderNav = (expanded: boolean) => (
+    <nav className="mt-6 space-y-2">
+      {navItems.map(({ label, to, icon: Icon }) => (
+        <NavLink
+          key={label}
+          to={to}
+          onClick={() => {
+            if (to === '/create-plan') resetCreatePlanForm()
+            if (window.innerWidth < 768) setSidebarOpen(false)
+          }}
+          className={({ isActive }) => `flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium transition ${isActive ? 'bg-[#EAF2EC] text-[#0B2B20]' : 'text-white/80 hover:bg-white/5 hover:text-white'} ${expanded ? '' : 'justify-center'}`}
+          title={label}
+        >
+          <Icon size={18} />
+          {expanded ? <span>{label}</span> : null}
+        </NavLink>
+      ))}
+    </nav>
+  )
 
   return (
-    <div className="min-h-screen bg-[#F7F9F7] text-[#18251D]">
-      <div className="flex min-h-screen">
-        <aside className={`${sidebarOpen ? 'w-72' : 'w-24'} hidden border-r border-[#DCE5DE] bg-[#0B2B20] px-3 py-5 text-white transition-all duration-200 md:block`}>
-          <div className={`flex items-center ${sidebarOpen ? 'justify-between' : 'justify-center'} gap-2`}>
-            <div className={`flex items-center gap-3 ${sidebarOpen ? 'block' : 'hidden'}`}>
-              <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[#EAF2EC] text-[#123D2B]">
-                <Rocket size={18} />
-              </div>
-              <div>
+    <div className="app-shell min-h-screen w-full bg-[#F7F9F7] text-[#18251D]">
+      <div className="min-h-screen w-full">
+        <aside className={`fixed inset-y-0 left-0 z-40 flex flex-col overflow-y-auto bg-[#0B2B20] px-3 py-5 text-white transition-all duration-200 ${sidebarOpen ? 'w-64' : 'w-16 md:w-20'}`}>
+          <div className={`flex items-center gap-2 ${sidebarOpen ? 'justify-between' : 'justify-center'}`}>
+            {sidebarOpen ? (
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#EAF2EC] text-[#123D2B]">
+                  <Rocket size={18} />
+                </div>
                 <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#CFE4D7]">GenPlan</div>
               </div>
-            </div>
-            <button onClick={() => setSidebarOpen((value) => !value)} className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white hover:bg-white/10">
-              {sidebarOpen ? <X size={16} /> : <Menu size={16} />}
+            ) : null}
+            <button
+              type="button"
+              aria-label={sidebarOpen ? 'Collapse menu' : 'Expand menu'}
+              aria-expanded={sidebarOpen}
+              onClick={() => setSidebarOpen((value) => !value)}
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white hover:bg-white/10"
+            >
+              <Menu size={18} />
             </button>
           </div>
+          {renderNav(sidebarOpen)}
 
-          <nav className="mt-6 space-y-2">
-            {navItems.map(({ label, to, icon: Icon }) => (
-              <NavLink
-                key={label}
-                to={to}
-                onClick={() => { if (to === '/create-plan') resetCreatePlanForm() }}
-                className={({ isActive }) => `flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium transition ${isActive ? 'bg-[#EAF2EC] text-[#0B2B20]' : 'text-white/80 hover:bg-white/5 hover:text-white'} ${sidebarOpen ? '' : 'justify-center'}`}
-                title={label}
-              >
-                <Icon size={18} />
-                {sidebarOpen ? <span>{label}</span> : null}
-              </NavLink>
-            ))}
-          </nav>
         </aside>
 
-        <main className="flex-1">
-          <div className="mx-auto max-w-7xl px-4 py-6 md:px-6 lg:px-8">
-            <header className="mb-6 rounded-2xl border border-[#DCE5DE] bg-white p-4 shadow-sm md:p-5">
-              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div className="flex items-center gap-3">
-                  <button onClick={() => setSidebarOpen((value) => !value)} className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#DCE5DE] bg-[#F7F9F7] text-[#123D2B] md:hidden">
-                    <Menu size={18} />
-                  </button>
-                  <div className="flex items-center gap-3">
-                    <div className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-[#EAF2EC] text-[#123D2B]">
-                      <Rocket size={20} />
-                    </div>
-                    <div>
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#245C43]">GenPlan</div>
-                      <h1 className="text-2xl font-bold text-[#18251D] md:text-3xl">Plan smarter. Deliver better.</h1>
-                    </div>
-                  </div>
-                </div>
+        {sidebarOpen ? <div className="fixed inset-0 z-30 bg-[#0B2B20]/40 md:hidden" onClick={() => setSidebarOpen(false)} /> : null}
 
-                <div className="flex items-center gap-3">
-                  <div className="rounded-full border border-[#DCE5DE] bg-[#F7F9F7] px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-[#245C43]">{status}</div>
-                  <button onClick={generatePlan} className="inline-flex items-center justify-center rounded-xl bg-[#123D2B] px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0B2B20]">
-                    <span className="inline-flex items-center gap-2"><Wrench size={16} /> {loading ? 'Generating...' : 'Generate Plan'}</span>
+        <main className={`min-w-0 pl-16 transition-[padding] duration-200 ${sidebarOpen ? 'md:pl-64' : 'md:pl-20'}`}>
+          <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-6 lg:px-8">
+            <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm">
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#EAF2EC] text-[#123D2B]"><Rocket size={14} /></span>
+                <span className="font-semibold text-[#6B776E]">GenPlan</span>
+                <span className="text-[#A9B8AE]">/</span>
+                <span className="truncate font-semibold text-[#18251D]">{pageTitle}</span>
+              </nav>
+              <div className="flex items-center gap-3">
+                <div className="rounded-full border border-[#DCE5DE] bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-[#245C43]">{status}</div>
+                {!isHomePage ? (
+                  <button type="button" onClick={handleHeaderAction} disabled={loading} className="inline-flex items-center justify-center rounded-xl bg-[#123D2B] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0B2B20] disabled:opacity-60">
+                    <span className="inline-flex items-center gap-2">
+                      {isCreatePage ? <Wrench size={16} /> : <FilePlus2 size={16} />}
+                      {isCreatePage ? (loading ? 'Generating...' : 'Generate Plan') : 'Create Plan'}
+                    </span>
                   </button>
-                </div>
+                ) : null}
               </div>
             </header>
 
+            {error ? <div role="alert" className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+
             <Routes>
               <Route path="/" element={
-                <>
-                  <div className="mb-6 rounded-2xl border border-[#DCE5DE] bg-[#F7F9F7] p-4 shadow-sm">
-                    <div className="rounded-2xl border border-[#DCE5DE] bg-[#EAF2EC] p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#245C43]">Overview</p>
-                          <h2 className="mt-1 text-xl font-bold text-[#18251D]">Portfolio snapshot</h2>
-                        </div>
-                        <div className="rounded-full border border-[#CFE4D7] bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#123D2B]">
-                          {todayLabel}
-                        </div>
-                      </div>
-
-                      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                        {overviewMetrics.map(({ label, value, note, link, icon: Icon }) => (
-                          <NavLink
-                            key={label}
-                            to={link}
-                            className="group flex items-center gap-3 rounded-xl border border-[#DCE5DE] bg-white px-3 py-3 text-left transition hover:border-[#245C43] hover:bg-[#F1F8F3]"
-                          >
-                            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#EAF2EC] text-[#123D2B]">
-                              <Icon size={18} />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#6B776E]">{label}</div>
-                              <div className="mt-1 text-2xl font-bold text-[#0B2B20]">{portfolioLoading ? '…' : value}</div>
-                            </div>
-                            <div className="text-right text-[10px] font-medium text-[#245C43]">{note}</div>
-                          </NavLink>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-6 grid gap-6 xl:grid-cols-2">
-                    <section className="rounded-2xl border border-[#DCE5DE] bg-white p-5 shadow-sm">
-                      <div className="mb-4 flex items-center justify-between">
-                        <h3 className="text-lg font-semibold text-[#18251D]">Project Status</h3>
-                        <span className="text-xs uppercase tracking-[0.12em] text-[#245C43]">Overview</span>
-                      </div>
-                      <div className="h-64">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <PieChart>
-                            <Tooltip />
-                            <Pie data={projectStatusData} dataKey="value" nameKey="name" innerRadius={62} outerRadius={92} paddingAngle={3}>
-                              {projectStatusData.map((item, index) => <Cell key={item.name} fill={['#123D2B', '#367653', '#A9C6B3', '#C7D1CA'][index % 4]} />)}
-                            </Pie>
-                          </PieChart>
-                        </ResponsiveContainer>
-                      </div>
-                      {!portfolioLoading && !projectStatusData.some((item) => item.value > 0) ? <p className="-mt-8 text-center text-sm text-[#6B776E]">No saved projects yet.</p> : null}
-                    </section>
-
-                    <section className="rounded-2xl border border-[#DCE5DE] bg-white p-5 shadow-sm">
-                      <div className="mb-4 flex items-center justify-between">
-                        <h3 className="text-lg font-semibold text-[#18251D]">Task Progress</h3>
-                        <span className="text-xs uppercase tracking-[0.12em] text-[#245C43]">Status</span>
-                      </div>
-                      <div className="h-64">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={taskChartData}>
-                            <CartesianGrid strokeDasharray="4 4" stroke="#DCE5DE" vertical={false} />
-                            <XAxis dataKey="name" />
-                            <YAxis allowDecimals={false} />
-                            <Tooltip />
-                            <Bar dataKey="value" fill="#367653" radius={[8,8,0,0]} />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                      {!portfolioLoading && !taskChartData.some((item) => item.value > 0) ? <p className="-mt-8 text-center text-sm text-[#6B776E]">No saved task data yet.</p> : null}
-                    </section>
-
-                    <section className="rounded-2xl border border-[#DCE5DE] bg-white p-5 shadow-sm">
-                      <div className="mb-4 flex items-center justify-between">
-                        <h3 className="text-lg font-semibold text-[#18251D]">Team Workload</h3>
-                        <span className="text-xs uppercase tracking-[0.12em] text-[#245C43]">Allocation</span>
-                      </div>
-                      <div className="h-64">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={workloadData} layout="vertical" margin={{ left: 12, right: 12 }}>
-                            <CartesianGrid strokeDasharray="4 4" stroke="#DCE5DE" horizontal={false} />
-                            <XAxis type="number" />
-                            <YAxis type="category" dataKey="name" width={50} />
-                            <Tooltip />
-                            <Bar dataKey="hours" fill="#245C43" radius={[0,8,8,0]} />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                      {!portfolioLoading && !workloadData.length ? <p className="-mt-8 text-center text-sm text-[#6B776E]">No team members yet.</p> : null}
-                    </section>
-
-                    <section className="rounded-2xl border border-[#DCE5DE] bg-white p-5 shadow-sm">
-                      <div className="mb-4 flex items-center justify-between">
-                        <h3 className="text-lg font-semibold text-[#18251D]">Project Timeline</h3>
-                        <span className="text-xs uppercase tracking-[0.12em] text-[#245C43]">Schedule</span>
-                      </div>
-                      <div className="h-64">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={timelineData}>
-                            <CartesianGrid strokeDasharray="4 4" stroke="#DCE5DE" vertical={false} />
-                            <XAxis dataKey="week" />
-                            <YAxis allowDecimals={false} />
-                            <Tooltip />
-                            <Bar dataKey="planned" fill="#DCE5DE" radius={[8,8,0,0]} />
-                            <Bar dataKey="completed" fill="#123D2B" radius={[8,8,0,0]} />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                      {!portfolioLoading && !timelineData.length ? <p className="-mt-8 text-center text-sm text-[#6B776E]">No scheduled task data yet.</p> : null}
-                    </section>
-                  </div>
-
-                  <div className="mt-6 grid gap-6 xl:grid-cols-3">
-                    <section className="rounded-2xl border border-[#DCE5DE] bg-white p-5 shadow-sm xl:col-span-2">
-                      <div className="mb-4 flex items-center justify-between">
-                        <h3 className="text-lg font-semibold text-[#18251D]">Recent Projects</h3>
-                        <NavLink to="/generated-plan" className="text-sm font-medium text-[#123D2B]">View all</NavLink>
-                      </div>
-                      <div className="space-y-3">
-                        {portfolioLoading ? <div role="status" className="p-3 text-sm text-[#6B776E]">Loading saved projects…</div> : dashboard?.recent_projects.length ? dashboard.recent_projects.map((item) => (
-                          <button key={item.id} onClick={() => void openProject(item.id)} className="flex w-full items-center justify-between rounded-xl border border-[#DCE5DE] bg-[#F7F9F7] p-3 text-left hover:border-[#245C43]">
-                            <div>
-                              <div className="font-medium text-[#18251D]">{item.name}</div>
-                              <div className="text-sm text-[#6B776E]">{item.project_type} · {item.task_count} tasks · {item.progress_percent}% complete</div>
-                            </div>
-                            <span className="rounded-full bg-[#EAF2EC] px-2.5 py-1 text-xs font-medium text-[#123D2B]">{item.status}</span>
-                          </button>
-                        )) : <div className="rounded-xl border border-dashed border-[#DCE5DE] bg-[#F7F9F7] p-4 text-sm text-[#6B776E]">No saved projects yet.</div>}
-                      </div>
-                    </section>
-
-                    <section className="rounded-2xl border border-[#DCE5DE] bg-white p-5 shadow-sm">
-                      <div className="mb-4 flex items-center justify-between">
-                        <h3 className="text-lg font-semibold text-[#18251D]">Upcoming Deadlines</h3>
-                      </div>
-                      <div className="space-y-3">
-                        {dashboard?.upcoming_deadlines.length ? dashboard.upcoming_deadlines.map((item) => (
-                          <button key={item.id} onClick={() => openProject(item.id)} className="flex w-full items-center justify-between rounded-xl border border-[#DCE5DE] bg-[#F7F9F7] p-3 text-left">
-                            <span className="font-medium text-[#18251D]">{item.name}</span>
-                            <span className="text-sm text-[#6B776E]">{item.deadline}</span>
-                          </button>
-                        )) : <div className="rounded-xl border border-dashed border-[#DCE5DE] bg-[#F7F9F7] p-4 text-sm text-[#6B776E]">No upcoming deadlines.</div>}
-                      </div>
-                    </section>
-
-                    <section className="rounded-2xl border border-[#DCE5DE] bg-white p-5 shadow-sm">
-                      <div className="mb-4 flex items-center justify-between">
-                        <h3 className="text-lg font-semibold text-[#18251D]">Quick Actions</h3>
-                      </div>
-                      <div className="space-y-3">
-                        <NavLink to="/create-plan" onClick={resetCreatePlanForm} className="flex items-center justify-between rounded-xl border border-[#DCE5DE] bg-[#F7F9F7] p-3 text-sm font-medium text-[#18251D]">Create a plan <Plus size={16} className="text-[#123D2B]" /></NavLink>
-                        <NavLink to="/team-info" className="flex items-center justify-between rounded-xl border border-[#DCE5DE] bg-[#F7F9F7] p-3 text-sm font-medium text-[#18251D]">Add team member <Users size={16} className="text-[#123D2B]" /></NavLink>
-                        <button onClick={archivePlan} className="flex w-full items-center justify-between rounded-xl border border-[#DCE5DE] bg-[#F7F9F7] p-3 text-sm font-medium text-[#18251D]">Archive current plan <Archive size={16} className="text-[#123D2B]" /></button>
-                      </div>
-                    </section>
-                  </div>
-                </>
+                <HomeDashboard
+                  dashboard={dashboard}
+                  loading={portfolioLoading}
+                  todayLabel={todayLabel}
+                  members={members}
+                  onOpenProject={(projectId) => void openProject(projectId)}
+                  onCreatePlan={() => { resetCreatePlanForm(); navigate('/create-plan') }}
+                />
               } />
 
               <Route path="/create-plan" element={
@@ -836,7 +1172,7 @@ function AppShell() {
 
                   <section className="rounded-2xl border border-[#DCE5DE] bg-white p-5 shadow-sm">
                     <div className="grid gap-6 xl:grid-cols-[1.5fr_1fr]">
-                      <div className="space-y-5">
+                      <div className="min-w-0 space-y-5">
                         <div className="grid gap-4 md:grid-cols-2">
                           <label className="block text-sm font-medium text-[#18251D]">Project Name<input value={project.name} onChange={(e) => handleProjectField('name', e.target.value)} className={inputClassName} /></label>
                           <label className="block text-sm font-medium text-[#18251D]">Project Type<select value={project.project_type} onChange={(e) => handleProjectField('project_type', e.target.value)} className={selectClassName}>{projectTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
@@ -866,7 +1202,7 @@ function AppShell() {
                         </div>
                       </div>
 
-                      <div className="space-y-4 rounded-2xl border border-[#DCE5DE] bg-[#F7F9F7] p-4">
+                      <div className="min-w-0 space-y-4 rounded-2xl border border-[#DCE5DE] bg-[#F7F9F7] p-4">
                         <div className="flex items-center gap-2 text-lg font-semibold text-[#18251D]"><FileText size={18} className="text-[#123D2B]" /> Upload User Story Document</div>
                         <div className="rounded-xl border-2 border-dashed border-[#DCE5DE] bg-white p-4">
                           <label className="inline-flex cursor-pointer items-center justify-center rounded-xl bg-[#123D2B] px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-[#0B2B20]">
@@ -902,15 +1238,19 @@ function AppShell() {
 
               <Route path="/team-info" element={
                 <div className="space-y-6">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#245C43]">Manage team</p>
                       <h2 className="text-2xl font-bold text-[#18251D]">Team Info</h2>
                     </div>
-                    <button onClick={openAddMemberForm} className="inline-flex items-center gap-2 rounded-xl bg-[#123D2B] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#0B2B20]">
+                    <button onClick={openAddMemberForm} className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-[#123D2B] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#0B2B20]">
                       <Plus size={16} /> Add Member
                     </button>
                   </div>
+
+                  <TeamWorkloadChart refreshKey={`${members.map((member) => `${member.id}:${member.hours_per_day}`).join('|')}#${savedProjects.map((item) => `${item.id}:${item.status}:${item.archived}`).join('|')}#${planSignature(plan)}`} />
+
+                  <EstimateCoachCard refreshKey={planSignature(plan)} />
 
                   <section className="rounded-2xl border border-[#DCE5DE] bg-white p-5 shadow-sm">
                     <div className="mb-4 flex items-center gap-2 rounded-xl border border-[#DCE5DE] bg-[#F7F9F7] px-3 py-2">
@@ -920,22 +1260,25 @@ function AppShell() {
 
                     <div className="space-y-3">
                       {filteredMembers.length ? filteredMembers.map((member) => (
-                        <div key={member.id} className="rounded-xl border border-[#DCE5DE] p-3">
+                        <div 
+                          key={member.id} 
+                          onClick={() => setSelectedMember(member)}
+                          className="cursor-pointer rounded-xl border border-[#DCE5DE] p-3 transition hover:border-[#245C43] hover:bg-[#F7F9F7]"
+                        >
                           <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <div className="font-semibold text-[#18251D]">{member.name}</div>
-                              <div className="text-xs uppercase tracking-wide text-[#245C43]">{member.role}</div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 font-semibold text-[#18251D]">{member.name}{member.is_lead ? <span className="inline-flex items-center gap-1 rounded-full bg-[#123D2B] px-2 py-0.5 text-[10px] font-semibold text-white"><Crown size={10} /> Team Lead</span> : null}</div>
+                              <div className="text-xs uppercase tracking-wide text-[#245C43]">{member.role}{member.additional_role ? ` · ${member.additional_role}` : ''}</div>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+                              <button onClick={() => setAllocationsMember(member)} className="inline-flex items-center gap-1 rounded-lg bg-[#123D2B] px-2 py-1.5 text-xs font-medium text-white hover:bg-[#0B2B20]"><FolderKanban size={12} /> Allocations</button>
                               <button onClick={() => openEditMemberForm(member)} className="inline-flex items-center gap-1 rounded-lg border border-[#DCE5DE] bg-white px-2 py-1.5 text-xs font-medium text-[#18251D]"><Pencil size={12} /> Edit</button>
                               <button onClick={() => removeMember(member.id)} className="inline-flex items-center gap-1 rounded-lg border border-[#DCE5DE] bg-white px-2 py-1.5 text-xs font-medium text-red-600"><X size={12} /> Delete</button>
                             </div>
                           </div>
-                          <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-[#6B776E]">
+                          <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-[#6B776E] sm:grid-cols-2">
                             <div><span className="font-medium text-[#18251D]">Experience:</span> {member.experience} yrs</div>
-                            <div><span className="font-medium text-[#18251D]">Allocation:</span> {member.allocation}%</div>
                             <div><span className="font-medium text-[#18251D]">Hours:</span> {member.hours_per_day}/day</div>
-                            <div><span className="font-medium text-[#18251D]">Availability:</span> {member.available_from ?? '—'} to {member.available_until ?? '—'}</div>
                           </div>
                           <div className="mt-3 text-xs text-[#6B776E]"><span className="font-medium text-[#18251D]">Skills:</span> {member.skills.join(', ') || 'None'}</div>
                         </div>
@@ -952,9 +1295,16 @@ function AppShell() {
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#245C43]">Project tracking</p>
                       <h2 className="text-2xl font-bold text-[#18251D]">Generated Plan</h2>
                     </div>
+                    <div className="inline-flex items-center gap-3 rounded-xl border border-[#DCE5DE] bg-white px-4 py-2 shadow-sm">
+                      <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-[#EAF2EC] text-[#123D2B]"><Rocket size={16} /></span>
+                      <div>
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#6B776E]">Active Projects</div>
+                        <div className="text-xl font-bold leading-none text-[#0B2B20]" aria-label="Active projects count">{portfolioLoading ? '…' : dashboard?.metrics.active_projects ?? 0}</div>
+                      </div>
+                    </div>
                   </div>
 
-                  <section className="rounded-2xl border border-[#DCE5DE] bg-white p-5 shadow-sm">
+                  <section className="min-w-0 rounded-2xl border border-[#DCE5DE] bg-white p-5 shadow-sm">
                     {savedProjects.some((item) => item.has_plan && !item.archived) ? (
                       <div className="mb-5 border-b border-[#DCE5DE] pb-4">
                         <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#245C43]">Active Generated Plans</div>
@@ -970,12 +1320,28 @@ function AppShell() {
                     {plan ? (
                       <div className="space-y-5">
                         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                          <div>
+                          <div className="min-w-0">
                             <div className="text-2xl font-bold text-[#18251D]">{plan.name || project.name}</div>
                             <div className="text-sm text-[#6B776E]">{plan.project_type || project.project_type} · {plan.start_date || project.start_date} to {plan.deadline || project.deadline}</div>
                           </div>
-                          <div className="flex gap-2">
-                            <button onClick={() => openProject(plan.project_id)} className="rounded-xl border border-[#DCE5DE] bg-white px-3 py-2 text-sm font-medium text-[#18251D]">Reload Plan</button>
+                          <div className="flex flex-wrap gap-2">
+                            {!plan.archived && missingMembers.length ? (
+                              <button type="button" disabled={assigningMembers} onClick={() => void assignNewMembers()} title={`Not on this project yet: ${missingMembers.map((member) => member.name).join(', ')}`} className="inline-flex items-center gap-1.5 rounded-xl border border-[#245C43] bg-[#EAF2EC] px-3 py-2 text-sm font-semibold text-[#123D2B] hover:bg-[#DCEBE1] disabled:opacity-50">
+                                <Users size={14} /> {assigningMembers ? 'Assigning…' : `Assign new members (${missingMembers.length})`}
+                              </button>
+                            ) : null}
+                            {!plan.archived ? (
+                              <button type="button" onClick={() => setReplanOpen(true)} className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5DE] bg-white px-3 py-2 text-sm font-medium text-[#18251D] hover:border-[#245C43]">
+                                <RefreshCw size={14} /> Re-plan from today
+                                {lateTaskCount ? <span className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">{lateTaskCount} late</span> : null}
+                              </button>
+                            ) : null}
+                            <button type="button" onClick={() => setReportOpen(true)} className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5DE] bg-white px-3 py-2 text-sm font-medium text-[#18251D] hover:border-[#245C43]">
+                              <ClipboardList size={14} /> Weekly report
+                            </button>
+                            {!plan.archived ? (
+                              <button type="button" disabled={regenerating} onClick={() => void regeneratePlan()} className="rounded-xl border border-[#DCE5DE] bg-white px-3 py-2 text-sm font-medium text-[#18251D] disabled:opacity-50">{regenerating ? 'Regenerating…' : 'Regenerate Plan'}</button>
+                            ) : null}
                             {plan.archived ? (
                               <button disabled={pendingProjectActionId === plan.project_id} onClick={() => void restoreProject(plan.project_id)} className="rounded-xl bg-[#123D2B] px-3 py-2 text-sm font-medium text-white disabled:opacity-50">{pendingProjectActionId === plan.project_id ? 'Restoring…' : 'Restore Plan'}</button>
                             ) : (
@@ -984,141 +1350,22 @@ function AppShell() {
                           </div>
                         </div>
 
-                        <div className="grid gap-4 md:grid-cols-3">
-                          <div className="rounded-xl bg-[#F7F9F7] p-3"><div className="text-xs uppercase tracking-[0.12em] text-[#6B776E]">Status</div><div className="mt-2 text-lg font-semibold text-[#18251D]">{plan.summary?.status || 'In Progress'}</div></div>
-                          <div className="rounded-xl bg-[#F7F9F7] p-3"><div className="text-xs uppercase tracking-[0.12em] text-[#6B776E]">Tasks</div><div className="mt-2 text-lg font-semibold text-[#18251D]">{plan.summary?.task_count ?? 0}</div></div>
-                          <div className="rounded-xl bg-[#F7F9F7] p-3"><div className="text-xs uppercase tracking-[0.12em] text-[#6B776E]">Progress</div><div className="mt-2 text-lg font-semibold text-[#18251D]">{plan.summary?.progress_percent ?? 0}%</div></div>
-                        </div>
+                        <ForecastCard projectId={plan.project_id} refreshKey={planSignature(plan)} onRequestReplan={() => setReplanOpen(true)} />
 
-                        <div className="space-y-4">
-                          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                            <label className="block text-sm text-[#18251D]">
-                              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-[#245C43]">Category</span>
-                              <select value={planFilters.category} onChange={(event) => setPlanFilters((current) => ({ ...current, category: event.target.value }))} className={selectClassName}>
-                                {taskCategories.map((category) => <option key={category} value={category}>{category}</option>)}
-                              </select>
-                            </label>
-                            <label className="block text-sm text-[#18251D]">
-                              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-[#245C43]">Member</span>
-                              <select value={planFilters.member} onChange={(event) => setPlanFilters((current) => ({ ...current, member: event.target.value }))} className={selectClassName}>
-                                {['All Members', ...new Set((plan?.tasks ?? []).map((task: Task) => task.assignee_name).filter(Boolean) as string[])].map((member) => <option key={member} value={member}>{member}</option>)}
-                              </select>
-                            </label>
-                            <label className="block text-sm text-[#18251D]">
-                              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-[#245C43]">Sort</span>
-                              <select value={planFilters.sort} onChange={(event) => setPlanFilters((current) => ({ ...current, sort: event.target.value }))} className={selectClassName}>
-                                <option value="priority">Priority</option>
-                                <option value="effort">Effort</option>
-                                <option value="schedule">Schedule</option>
-                              </select>
-                            </label>
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-2">
-                            <select value={planFilters.status} onChange={(event) => setPlanFilters((current) => ({ ...current, status: event.target.value }))} className={selectClassName}>
-                              {['All Statuses', 'Pending', 'In Progress', 'Completed', 'Blocked'].map((status) => <option key={status} value={status}>{status}</option>)}
-                            </select>
-                            <button onClick={() => setPlanFilters({ category: 'All Tasks', member: 'All Members', status: 'All Statuses', sort: 'priority' })} className="rounded-xl border border-[#DCE5DE] bg-white px-3 py-2 text-sm font-medium text-[#18251D]">Clear filters</button>
-                          </div>
-
-                          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                            {categoryBreakdown.map((group) => (
-                              <button key={group.category} type="button" onClick={() => setPlanFilters((current) => ({ ...current, category: current.category === group.category ? 'All Tasks' : group.category }))} aria-pressed={planFilters.category === group.category} className={`rounded-xl border p-3 text-left transition ${planFilters.category === group.category ? 'border-[#123D2B] bg-[#EAF2EC]' : 'border-[#DCE5DE] bg-[#F7F9F7] hover:border-[#245C43]'}`}>
-                                <div className="text-xs uppercase tracking-[0.12em] text-[#6B776E]">{group.category}</div>
-                                <div className="mt-2 text-xl font-semibold text-[#18251D]">{group.count}</div>
-                              </button>
-                            ))}
-                          </div>
-
-                          <section className="overflow-hidden rounded-xl border border-[#DCE5DE]">
-                            <div className="border-b border-[#DCE5DE] bg-[#F7F9F7] px-3 py-2">
-                              <h3 className="font-semibold text-[#18251D]">Team Member Workflow / Daily Workload</h3>
-                            </div>
-                            {dailyWorkflow.some((day) => day.tasks.length > 0) ? (
-                              <div className="overflow-x-auto">
-                                <table className="min-w-full text-left text-sm">
-                                  <thead className="bg-white text-[#18251D]">
-                                    <tr>
-                                      <th className="px-3 py-2 font-semibold">Workday</th>
-                                      <th className="px-3 py-2 font-semibold">Team Member</th>
-                                      <th className="px-3 py-2 font-semibold">Scheduled Tasks</th>
-                                      <th className="px-3 py-2 font-semibold">Allocated / Capacity</th>
-                                      <th className="px-3 py-2 font-semibold">Remaining</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {dailyWorkflow.map((day) => (
-                                      <tr key={`${day.date}-${day.member_id}`} className="border-t border-[#DCE5DE] align-top">
-                                        <td className="whitespace-nowrap px-3 py-2 font-medium text-[#18251D]">{day.date}</td>
-                                        <td className="whitespace-nowrap px-3 py-2 text-[#18251D]">{day.member_name}</td>
-                                        <td className="min-w-[280px] px-3 py-2">
-                                          {day.tasks.length ? <div className="space-y-2">{day.tasks.map((item) => (
-                                            <div key={item.id} className="rounded-lg border border-[#DCE5DE] bg-[#F7F9F7] p-2">
-                                              <div className="font-medium text-[#18251D]">{item.id} · {item.title}</div>
-                                              <div className="text-xs text-[#6B776E]">{item.start_date || day.date} to {item.end_date || day.date} · {item.allocated_hours}h today / {item.effort_hours}h estimated · {item.status}</div>
-                                            </div>
-                                          ))}</div> : <span className="text-xs text-[#6B776E]">No tasks scheduled</span>}
-                                        </td>
-                                        <td className="whitespace-nowrap px-3 py-2 text-[#18251D]">{day.allocated_hours}h / {day.capacity_hours}h</td>
-                                        <td className="whitespace-nowrap px-3 py-2 text-[#18251D]">{day.remaining_hours}h</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            ) : <div className="p-4 text-sm text-[#6B776E]">{planMembers.length ? 'No scheduled tasks are assigned to team members.' : 'No team members are assigned to this project.'}</div>}
-                          </section>
-
-                          <div className="space-y-3">
-                            {filteredPlanTasks.length ? filteredPlanTasks.map((task: Task) => {
-                              const isOpen = expandedTaskId === task.id
-                              return (
-                                <div key={task.id} className="rounded-xl border border-[#DCE5DE] p-3">
-                                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                                    <button type="button" onClick={() => setExpandedTaskId(isOpen ? null : task.id)} className="flex flex-1 items-center justify-between gap-3 text-left">
-                                      <div>
-                                        <div className="font-medium text-[#18251D]">{task.id} · {task.title}</div>
-                                        <div className="text-sm text-[#6B776E]">{task.category} · {task.assignee_name || 'Unassigned'} · {task.effort_hours}h · {task.priority}</div>
-                                      </div>
-                                      <span className="text-xs uppercase tracking-[0.12em] text-[#245C43]">{isOpen ? 'Hide' : 'View details'}</span>
-                                    </button>
-                                    <select value={task.status} onChange={(e) => adjustTaskStatus(task.id, e.target.value)} className="rounded-lg border border-[#DCE5DE] bg-white px-2 py-1 text-sm text-[#18251D]">
-                                      <option value="Pending">Pending</option>
-                                      <option value="In Progress">In Progress</option>
-                                      <option value="Completed">Completed</option>
-                                      <option value="Blocked">Blocked</option>
-                                    </select>
-                                    <select aria-label={`Assign ${task.id}`} value={task.assignee_id ?? ''} onChange={(event) => void adjustTaskAssignment(task.id, event.target.value)} className="rounded-lg border border-[#DCE5DE] bg-white px-2 py-1 text-sm text-[#18251D]">
-                                      <option value="">Unassigned</option>
-                                      {planMembers.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
-                                    </select>
-                                  </div>
-
-                                  {isOpen ? (
-                                    <div className="mt-3 space-y-3 border-t border-[#DCE5DE] pt-3 text-sm text-[#18251D]">
-                                      <p><span className="font-semibold text-[#18251D]">Description:</span> {task.description || 'No description available.'}</p>
-                                      <p><span className="font-semibold text-[#18251D]">Story:</span> {task.source_story || task.story_ids.join(', ') || 'Project requirement'}</p>
-                                      <p><span className="font-semibold text-[#18251D]">Acceptance criteria:</span> {(task.acceptance_criteria ?? []).join('; ') || 'No acceptance criteria specified.'}</p>
-                                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                                        <div><span className="font-semibold text-[#18251D]">Start:</span> {task.start_date || '—'}</div>
-                                        <div><span className="font-semibold text-[#18251D]">End:</span> {task.end_date || '—'}</div>
-                                        <div><span className="font-semibold text-[#18251D]">Dependencies:</span> {task.dependencies.length ? task.dependencies.join(', ') : 'None'}</div>
-                                        <div><span className="font-semibold text-[#18251D]">Assigned:</span> {task.assignee_name || 'Unassigned'}</div>
-                                      </div>
-                                      {task.warning ? <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">{task.warning}</div> : null}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              )
-                            }) : <div className="rounded-xl border border-dashed border-[#DCE5DE] bg-[#F7F9F7] p-4 text-sm text-[#6B776E]">No tasks match the selected filters.</div>}
-                          </div>
-                        </div>
+                        <GeneratedPlanView
+                          key={plan.project_id}
+                          plan={plan}
+                          members={planMembers}
+                          onStatusChange={adjustTaskStatus}
+                          onAssign={adjustTaskAssignment}
+                          canReassign={!plan.archived}
+                        />
                       </div>
                     ) : savedProjects.some((item) => item.has_plan && !item.archived) ? (
                       <div className="space-y-3">
                         <p className="text-sm text-[#6B776E]">Choose a saved project to open its plan.</p>
                         {savedProjects.filter((item) => item.has_plan && !item.archived).map((item) => (
-                          <button key={item.id} onClick={() => openProject(item.id)} className="flex w-full items-center justify-between rounded-xl border border-[#DCE5DE] bg-[#F7F9F7] p-3 text-left hover:border-[#245C43]">
+                          <button key={item.id} onClick={() => openProject(item.id)} className="flex w-full items-center justify-between gap-3 rounded-xl border border-[#DCE5DE] bg-[#F7F9F7] p-3 text-left hover:border-[#245C43]">
                             <span className="font-medium text-[#18251D]">{item.name}</span>
                             <span className="text-sm text-[#6B776E]">{item.archived ? 'Archived' : item.status}</span>
                           </button>
@@ -1140,12 +1387,12 @@ function AppShell() {
 
                   <section className="rounded-2xl border border-[#DCE5DE] bg-white p-5 shadow-sm">
                     {portfolioLoading ? <div role="status" className="p-4 text-sm text-[#6B776E]">Loading archived plans…</div> : archivedPlans.length ? archivedPlans.map((item) => (
-                      <div key={item.id} className="mb-3 flex items-center justify-between rounded-xl border border-[#DCE5DE] bg-[#F7F9F7] p-3 last:mb-0">
-                        <div>
+                      <div key={item.id} className="mb-3 flex flex-col gap-3 rounded-xl border border-[#DCE5DE] bg-[#F7F9F7] p-3 last:mb-0 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
                           <div className="font-medium text-[#18251D]">{item.name}</div>
                           <div className="text-sm text-[#6B776E]">{item.status} · {item.deadline || 'No deadline'}</div>
                         </div>
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2">
                           <button onClick={() => void openProject(item.id)} className="rounded-lg border border-[#DCE5DE] bg-white px-3 py-2 text-sm font-medium text-[#18251D]">Open</button>
                           <button disabled={pendingProjectActionId === item.id} onClick={() => void restoreProject(item.id)} className="rounded-lg bg-[#123D2B] px-3 py-2 text-sm font-medium text-white disabled:opacity-50">{pendingProjectActionId === item.id ? 'Restoring…' : 'Restore'}</button>
                           <button disabled={pendingProjectActionId === item.id} onClick={() => void deleteProject(item.id)} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-600 disabled:opacity-50">Delete</button>
@@ -1159,11 +1406,11 @@ function AppShell() {
               <Route path="*" element={<div className="rounded-2xl border border-[#DCE5DE] bg-white p-10 text-center shadow-sm"><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#245C43]">404</p><h2 className="mt-2 text-2xl font-bold text-[#18251D]">Page not found</h2><NavLink to="/" className="mt-4 inline-block rounded-xl bg-[#123D2B] px-4 py-2.5 text-sm font-semibold text-white">Back to Home</NavLink></div>} />
             </Routes>
 
-            {error ? <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
           </div>
         </main>
       </div>
 
+      {/* Team Member Form Modal */}
       {memberFormOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0B2B20]/35 p-4 backdrop-blur-[2px]">
           <div className="w-full max-w-4xl rounded-2xl border border-[#DCE5DE] bg-white shadow-2xl">
@@ -1183,10 +1430,15 @@ function AppShell() {
                   <div className="mb-4 text-sm font-semibold uppercase tracking-[0.12em] text-[#245C43]">Personal Information</div>
                   <div className="grid gap-4 md:grid-cols-2">
                     <TextInput label="Name" required value={memberFormValues.name} onChange={(event) => setMemberFormValues((current) => ({ ...current, name: event.target.value }))} error={memberFormErrors.name} />
-                    <TextInput label="Email Address" required type="email" value={memberFormValues.email} onChange={(event) => setMemberFormValues((current) => ({ ...current, email: event.target.value }))} error={memberFormErrors.email} />
+                    <TextInput label="Email Address (optional)" type="email" value={memberFormValues.email} onChange={(event) => setMemberFormValues((current) => ({ ...current, email: event.target.value }))} error={memberFormErrors.email} />
                     <SelectField label="Role" required value={memberFormValues.role} onChange={(event) => setMemberFormValues((current) => ({ ...current, role: event.target.value }))} error={memberFormErrors.role}>
                       {roleOptions.map((role) => <option key={role} value={role}>{role}</option>)}
                     </SelectField>
+                    <SelectField label="Additional Role (optional)" value={memberFormValues.additional_role} onChange={(event) => setMemberFormValues((current) => ({ ...current, additional_role: event.target.value }))}>
+                      <option value="">None</option>
+                      {roleOptions.filter((role) => role !== memberFormValues.role).map((role) => <option key={role} value={role}>{role}</option>)}
+                    </SelectField>
+                    <p className="text-xs text-[#6B776E] md:col-span-2">Choosing <span className="font-semibold text-[#18251D]">Team Lead</span> as the role or the additional role lets this person reassign and edit tasks.</p>
                   </div>
                 </div>
 
@@ -1200,13 +1452,12 @@ function AppShell() {
                       <option value="Advanced">Advanced</option>
                       <option value="Expert">Expert</option>
                     </SelectField>
-                    <div className="md:col-span-2"><TextInput label="Primary Skills" required value={memberFormValues.primary_skills} onChange={(event) => setMemberFormValues((current) => ({ ...current, primary_skills: event.target.value }))} error={memberFormErrors.primary_skills} /></div>
-                    <div className="md:col-span-2"><TextInput label="Additional Skills" value={memberFormValues.additional_skills} onChange={(event) => setMemberFormValues((current) => ({ ...current, additional_skills: event.target.value }))} /></div>
+                    <div className="md:col-span-2"><TextInput label="Skills (comma separated)" required value={memberFormValues.primary_skills} onChange={(event) => setMemberFormValues((current) => ({ ...current, primary_skills: event.target.value }))} error={memberFormErrors.primary_skills} /></div>
                   </div>
                 </div>
 
                 <div>
-                  <div className="mb-4 text-sm font-semibold uppercase tracking-[0.12em] text-[#245C43]">Work Schedule and Availability</div>
+                  <div className="mb-4 text-sm font-semibold uppercase tracking-[0.12em] text-[#245C43]">Work Schedule</div>
                   <div className="grid gap-4 md:grid-cols-2">
                     <TextInput label="Working Hours Per Day" required type="number" min="1" max="24" value={memberFormValues.hours_per_day} onChange={(event) => setMemberFormValues((current) => ({ ...current, hours_per_day: event.target.value }))} error={memberFormErrors.hours_per_day} />
                     <fieldset className="space-y-2">
@@ -1229,17 +1480,10 @@ function AppShell() {
                         ))}
                       </div>
                     </fieldset>
-                    <DateField label="Availability Start Date" value={memberFormValues.availability_start} onChange={(event) => setMemberFormValues((current) => ({ ...current, availability_start: event.target.value }))} error={memberFormErrors.availability_start} />
-                    <DateField label="Availability End Date" value={memberFormValues.availability_end} onChange={(event) => setMemberFormValues((current) => ({ ...current, availability_end: event.target.value }))} error={memberFormErrors.availability_end} />
                     <div className="md:col-span-2"><TextInput label="Leave Dates" value={memberFormValues.leave_dates} onChange={(event) => setMemberFormValues((current) => ({ ...current, leave_dates: event.target.value }))} /></div>
-                    <TextInput label="Allocation Percentage" required type="number" min="1" max="100" value={memberFormValues.allocation} onChange={(event) => setMemberFormValues((current) => ({ ...current, allocation: event.target.value }))} error={memberFormErrors.allocation} />
                   </div>
                 </div>
 
-                <div>
-                  <div className="mb-4 text-sm font-semibold uppercase tracking-[0.12em] text-[#245C43]">Additional Information</div>
-                  <TextAreaField label="Notes" value={memberFormValues.notes} onChange={(event) => setMemberFormValues((current) => ({ ...current, notes: event.target.value }))} />
-                </div>
               </div>
 
               {memberFeedback ? <div className="mt-5 rounded-xl border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">{memberFeedback}</div> : null}
@@ -1252,6 +1496,48 @@ function AppShell() {
           </div>
         </div>
       ) : null}
+
+      {/* Team Member Details Modal */}
+      {selectedMember ? (
+        <ModalShell
+          title={selectedMember.name}
+          subtitle={`${selectedMember.role} · ${selectedMember.experience} yrs exp`}
+          onClose={() => setSelectedMember(null)}
+        >
+          <div className="space-y-6">
+            <div>
+              <h4 className="mb-2 text-sm font-semibold text-[#18251D]">Project Allocations</h4>
+              <button
+                type="button"
+                onClick={() => { const member = selectedMember; setSelectedMember(null); setAllocationsMember(member) }}
+                className="inline-flex items-center gap-2 rounded-xl bg-[#123D2B] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0B2B20]"
+              >
+                <FolderKanban size={14} /> View projects and hours
+              </button>
+            </div>
+
+            <div>
+              <h4 className="mb-2 text-sm font-semibold text-[#18251D]">Availability</h4>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <Fact label="Hours / Day" value={`${selectedMember.hours_per_day}h`} />
+              </div>
+            </div>
+
+            <div>
+              <h4 className="mb-2 text-sm font-semibold text-[#18251D]">Skills</h4>
+              <div className="flex flex-wrap gap-2">
+                {selectedMember.skills.length > 0 ? selectedMember.skills.map(skill => (
+                  <span key={skill} className="rounded-full bg-[#EAF2EC] px-2 py-1 text-xs font-medium text-[#123D2B]">{skill}</span>
+                )) : <span className="text-sm text-[#6B776E]">No skills listed.</span>}
+              </div>
+            </div>
+          </div>
+        </ModalShell>
+      ) : null}
+
+      {allocationsMember ? <MemberAllocationsModal member={allocationsMember} onClose={() => setAllocationsMember(null)} /> : null}
+      {replanOpen && plan ? <ReplanModal projectId={plan.project_id} onClose={() => setReplanOpen(false)} onApplied={() => refreshPortfolio(plan.project_id)} /> : null}
+      {reportOpen && plan ? <WeeklyReportModal projectId={plan.project_id} onClose={() => setReportOpen(false)} /> : null}
     </div>
   )
 }

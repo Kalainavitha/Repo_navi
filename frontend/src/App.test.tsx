@@ -27,12 +27,12 @@ describe('App', () => {
       stories: [],
       summary: { task_count: 6, progress_percent: 0 },
       tasks: [
-        { id: 'TSK-1', title: 'Build UI', description: '', story_ids: [], category: 'UI/Frontend', effort_hours: 3, remaining_hours: 3, priority: 'High', required_skills: [], assignee_id: null, dependencies: [], status: 'Pending' },
-        { id: 'TSK-2', title: 'Build API', description: '', story_ids: [], category: 'Backend', effort_hours: 4, remaining_hours: 4, priority: 'Medium', required_skills: [], assignee_id: null, dependencies: [], status: 'Pending' },
-        { id: 'TSK-3', title: 'Run tests', description: '', story_ids: [], category: 'QA/Testing', effort_hours: 2, remaining_hours: 2, priority: 'Medium', required_skills: [], assignee_id: null, dependencies: [], status: 'Pending' },
-        { id: 'TSK-4', title: 'Connect services', description: '', story_ids: [], category: 'Integration', effort_hours: 2, remaining_hours: 2, priority: 'Medium', required_skills: [], assignee_id: null, dependencies: [], status: 'Pending' },
-        { id: 'TSK-5', title: 'Deploy release', description: '', story_ids: [], category: 'DevOps/Deployment', effort_hours: 2, remaining_hours: 2, priority: 'Low', required_skills: [], assignee_id: null, dependencies: [], status: 'Pending' },
-        { id: 'TSK-6', title: 'Write guide', description: '', story_ids: [], category: 'Documentation', effort_hours: 1, remaining_hours: 1, priority: 'Low', required_skills: [], assignee_id: null, dependencies: [], status: 'Pending' },
+        { id: 'TSK-1', title: 'Build UI', description: '', story_ids: [], category: 'UI/Frontend', effort_hours: 3, remaining_hours: 3, priority: 'High', required_skills: [], assignee_id: 'M1', assignee_name: 'Mia', dependencies: [], status: 'Pending' },
+        { id: 'TSK-2', title: 'Build API', description: '', story_ids: [], category: 'Backend', effort_hours: 4, remaining_hours: 4, priority: 'Medium', required_skills: [], assignee_id: 'M1', assignee_name: 'Mia', dependencies: [], status: 'Pending' },
+        { id: 'TSK-3', title: 'Run tests', description: '', story_ids: [], category: 'QA/Testing', effort_hours: 2, remaining_hours: 2, priority: 'Medium', required_skills: [], assignee_id: 'M1', assignee_name: 'Mia', dependencies: [], status: 'Pending' },
+        { id: 'TSK-4', title: 'Connect services', description: '', story_ids: [], category: 'Integration', effort_hours: 2, remaining_hours: 2, priority: 'Medium', required_skills: [], assignee_id: 'M1', assignee_name: 'Mia', dependencies: [], status: 'Pending' },
+        { id: 'TSK-5', title: 'Deploy release', description: '', story_ids: [], category: 'DevOps/Deployment', effort_hours: 2, remaining_hours: 2, priority: 'Low', required_skills: [], assignee_id: 'M1', assignee_name: 'Mia', dependencies: [], status: 'Pending' },
+        { id: 'TSK-6', title: 'Write guide', description: '', story_ids: [], category: 'Documentation', effort_hours: 1, remaining_hours: 1, priority: 'Low', required_skills: [], assignee_id: 'M1', assignee_name: 'Mia', dependencies: [], status: 'Pending' },
       ],
     }
     const savedProject = { id: 41, name: 'Filterable Portal', description: '', project_type: 'Web Application', start_date: '2026-10-27', deadline: '2026-11-30', status: 'Active', archived: false, has_plan: true, plan: savedPlan }
@@ -56,28 +56,28 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await screen.findByText('TSK-1 · Build UI')
-    expect(screen.getByText('TSK-2 · Build API')).toBeInTheDocument()
+    await screen.findAllByText('Build UI')
+    expect(screen.getAllByText('Build API').length).toBeGreaterThan(0)
     expect(screen.queryByPlaceholderText(/task or id/i)).not.toBeInTheDocument()
     const categories = [
-      ['UI/Frontend', 'TSK-1 · Build UI'],
-      ['Backend', 'TSK-2 · Build API'],
-      ['QA/Testing', 'TSK-3 · Run tests'],
-      ['Integration', 'TSK-4 · Connect services'],
-      ['DevOps/Deployment', 'TSK-5 · Deploy release'],
-      ['Documentation', 'TSK-6 · Write guide'],
+      ['UI/Frontend', 'Build UI'],
+      ['Backend', 'Build API'],
+      ['QA/Testing', 'Run tests'],
+      ['Integration', 'Connect services'],
+      ['DevOps/Deployment', 'Deploy release'],
+      ['Documentation', 'Write guide'],
     ]
     for (const [category, expectedTask] of categories) {
       const filter = screen.getAllByRole('button', { name: new RegExp(category) }).find((button) => button.hasAttribute('aria-pressed'))
       expect(filter).toBeDefined()
       fireEvent.click(filter!)
-      await waitFor(() => expect(screen.getByText(expectedTask)).toBeInTheDocument())
+      await waitFor(() => expect(screen.getAllByText(expectedTask).length).toBeGreaterThan(0))
       for (const [, otherTask] of categories.filter(([otherCategory]) => otherCategory !== category)) {
-        expect(screen.queryByText(otherTask)).not.toBeInTheDocument()
+        expect(screen.queryAllByText(otherTask)).toHaveLength(0)
       }
     }
     fireEvent.change(screen.getByLabelText(/Category/), { target: { value: 'All Tasks' } })
-    for (const [, expectedTask] of categories) expect(screen.getByText(expectedTask)).toBeInTheDocument()
+    for (const [, expectedTask] of categories) expect(screen.getAllByText(expectedTask).length).toBeGreaterThan(0)
     vi.unstubAllGlobals()
   })
 

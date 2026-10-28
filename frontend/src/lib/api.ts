@@ -14,7 +14,10 @@ async function responseError(response: Response) {
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   try {
     const response = await fetch(`${API_BASE}${path}`, {
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+      },
       ...options,
     })
     if (!response.ok) {
@@ -67,6 +70,23 @@ export async function previewDocument(file: File) {
   } catch (error) {
     if (error instanceof TypeError) {
       throw new Error('The document preview could not reach the GenPlan backend. Check the FastAPI server and API base URL.')
+    }
+    throw error
+  }
+}
+
+
+// Fetches a file (Word, PDF, CSV...) and returns it with the name the server chose.
+export async function downloadFile(path: string): Promise<{ blob: Blob; filename: string }> {
+  try {
+    const response = await fetch(`${API_BASE}${path}`)
+    if (!response.ok) throw new Error(await responseError(response))
+    const disposition = response.headers.get('Content-Disposition') ?? ''
+    const filename = /filename="?([^";]+)"?/i.exec(disposition)?.[1] ?? 'download'
+    return { blob: await response.blob(), filename }
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error('The download could not reach the GenPlan backend. Confirm the FastAPI server is running.')
     }
     throw error
   }

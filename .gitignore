@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .venv/
+.venv_*/
 venv/
 
 # Node
@@ -17,3 +18,6 @@ dist/
 
 # VS Code
 .vscode/
+
+backend/genplan_backend.egg-info/
+package-lock.json

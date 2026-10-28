@@ -4,6 +4,38 @@ WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturd
 WEEKDAY_LOOKUP = {name.lower(): index for index, name in enumerate(WEEKDAY_NAMES)}
 
 
+def _normalize_working_days(value):
+    if value is None:
+        return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    if isinstance(value, str):
+        value = [item.strip() for item in value.split(",") if item.strip()]
+    if not isinstance(value, list):
+        raise ValueError("Choose at least one valid working day.")
+    normalized = []
+    for day in value:
+        if isinstance(day, int):
+            index = day
+        elif isinstance(day, str):
+            key = day.strip().lower()
+            if key.isdigit():
+                index = int(key)
+            else:
+                index = WEEKDAY_LOOKUP.get(key)
+        else:
+            raise ValueError("Choose at least one valid working day.")
+        
+        if index is None or not 0 <= index <= 6:
+            raise ValueError("Choose at least one valid working day (Monday through Sunday).")
+        normalized.append(WEEKDAY_NAMES[index])
+    unique = []
+    seen = set()
+    for weekday in normalized:
+        if weekday not in seen:
+            seen.add(weekday)
+            unique.append(weekday)
+    return sorted(unique, key=lambda name: WEEKDAY_NAMES.index(name))
+
+
 class MemberInput(BaseModel):
     id: str | None = None
     name: str = Field(min_length=1, max_length=120)
@@ -19,6 +51,20 @@ class MemberInput(BaseModel):
     email: str | None = Field(default=None, max_length=255)
     notes: str | None = None
     hourly_rate: float | None = Field(default=None, ge=0)
+    is_lead: bool = False
+    additional_role: str | None = Field(default=None, max_length=80)
+
+    @field_validator("working_days", mode="before")
+    @classmethod
+    def valid_member_working_days(cls, value):
+        return _normalize_working_days(value)
+        
+    @field_validator("available_from", "available_until", "email", "notes", "additional_role", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, v):
+        if v == "":
+            return None
+        return v
 
 
 class ProjectCreate(BaseModel):
@@ -39,36 +85,7 @@ class ProjectCreate(BaseModel):
     @field_validator("working_days", mode="before")
     @classmethod
     def valid_working_days(cls, value):
-        if value is None:
-            return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-        if isinstance(value, str):
-            value = [item.strip() for item in value.split(",") if item.strip()]
-        if not isinstance(value, list):
-            raise ValueError("Choose at least one valid working day.")
-
-        normalized = []
-        for day in value:
-            if isinstance(day, int):
-                index = day
-            elif isinstance(day, str):
-                key = day.strip().lower()
-                if key.isdigit():
-                    index = int(key)
-                else:
-                    index = WEEKDAY_LOOKUP.get(key)
-            else:
-                raise ValueError("Choose at least one valid working day.")
-            if index is None or not 0 <= index <= 6:
-                raise ValueError("Choose at least one valid working day (Monday through Sunday).")
-            normalized.append(WEEKDAY_NAMES[index])
-
-        unique = []
-        seen = set()
-        for weekday in normalized:
-            if weekday not in seen:
-                seen.add(weekday)
-                unique.append(weekday)
-        return sorted(unique, key=lambda name: WEEKDAY_NAMES.index(name))
+        return _normalize_working_days(value)
 
 
 class TaskUpdate(BaseModel):
@@ -98,6 +115,22 @@ class MemberUpdate(BaseModel):
     email: str | None = Field(default=None, max_length=255)
     notes: str | None = None
     hourly_rate: float | None = Field(default=None, ge=0)
+    is_lead: bool | None = None
+    additional_role: str | None = Field(default=None, max_length=80)
+
+    @field_validator("working_days", mode="before")
+    @classmethod
+    def valid_member_working_days(cls, value):
+        if value is None:
+            return None
+        return _normalize_working_days(value)
+
+    @field_validator("available_from", "available_until", "email", "notes", "additional_role", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, v):
+        if v == "":
+            return None
+        return v
 
 
 class ProjectUpdate(BaseModel):
